@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>과학관 레이더</title>
+<style>
+  :root{
+    --bg:#02100c; --grid:#16b46b; --grid-dim:#0c5c37; --scan:#2effa6;
+    --fg:#c9ffe6; --dim:#4f8a70; --acc:#2effa6; --warn:#ffcf5c; --err:#ff5d6c;
+    --panel:rgba(3,26,18,.82);
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--fg);
+    font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;-webkit-text-size-adjust:100%;}
+  #stage{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;}
+  canvas{display:block;touch-action:none;}
+
+  /* ── HUD ── */
+  #hud{position:fixed;inset:0;pointer-events:none;}
+  .panel{position:absolute;background:var(--panel);border:1px solid var(--grid-dim);
+    border-radius:12px;padding:10px 12px;backdrop-filter:blur(6px);pointer-events:auto;}
+  #topbar{top:env(safe-area-inset-top,8px);left:8px;right:8px;display:flex;gap:8px;align-items:center;
+    justify-content:space-between;flex-wrap:wrap;}
+  #topbar .title{font-weight:700;color:var(--acc);letter-spacing:.04em;}
+  #status{font-size:12px;color:var(--dim);}
+  #status b{color:var(--fg);font-weight:600;}
+  .pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;
+    border:1px solid currentColor;}
+  .pill.good{color:var(--acc);} .pill.mid{color:var(--warn);} .pill.bad{color:var(--err);} .pill.off{color:var(--dim);}
+
+  #controls{bottom:env(safe-area-inset-bottom,10px);left:8px;right:8px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;}
+  button{appearance:none;border:1px solid var(--grid-dim);background:rgba(4,40,28,.9);color:var(--fg);
+    border-radius:10px;padding:10px 14px;font-size:13px;font-weight:600;cursor:pointer;pointer-events:auto;touch-action:manipulation;}
+  button.on{background:var(--acc);color:#022;border-color:var(--acc);}
+  button:active{transform:translateY(1px);}
+
+  #legend{position:absolute;left:8px;bottom:70px;font-size:11px;color:var(--dim);pointer-events:none;}
+  #legend b{color:var(--grid);}
+
+  /* ── indoor overlay ── */
+  #indoor{position:fixed;inset:0;background:#020a07;display:none;flex-direction:column;z-index:20;}
+  #indoor.show{display:flex;}
+  #indoor .ihead{padding:calc(env(safe-area-inset-top,8px) + 10px) 14px 10px;display:flex;align-items:center;justify-content:space-between;}
+  #indoor .ihead .n{font-size:17px;font-weight:700;color:var(--acc);}
+  #indoor .imapwrap{flex:1;display:flex;align-items:center;justify-content:center;overflow:auto;padding:8px;}
+  #indoor img{max-width:100%;max-height:100%;object-fit:contain;border-radius:8px;}
+  #indoor .imapph{width:88%;max-width:520px;aspect-ratio:4/3;border:1px dashed var(--grid-dim);border-radius:12px;
+    display:flex;align-items:center;justify-content:center;color:var(--dim);text-align:center;padding:20px;font-size:13px;}
+  #indoor .ifoot{padding:12px 14px calc(env(safe-area-inset-bottom,8px) + 12px);text-align:center;color:var(--warn);font-size:12px;}
+
+  /* ── permission / intro gate ── */
+  #gate{position:fixed;inset:0;z-index:30;background:radial-gradient(circle at 50% 40%,#04241a,#010a07 70%);
+    display:flex;align-items:center;justify-content:center;padding:24px;}
+  #gate .box{max-width:420px;text-align:center;}
+  #gate h1{color:var(--acc);font-size:22px;margin:.2em 0;}
+  #gate p{color:var(--dim);font-size:13px;line-height:1.6;}
+  #gate .startbtn{margin-top:18px;background:var(--acc);color:#022;border-color:var(--acc);font-size:16px;padding:14px 28px;}
+  .hidden{display:none!important;}
+  .toast{position:fixed;left:50%;top:20%;transform:translateX(-50%);background:var(--panel);border:1px solid var(--grid-dim);
+    padding:10px 16px;border-radius:10px;z-index:40;font-size:13px;pointer-events:none;opacity:0;transition:opacity .3s;}
+  .toast.show{opacity:1;}
+</style>
+</head>
+<body>
+  <div id="stage"><canvas id="radar"></canvas></div>
+
+  <div id="hud">
+    <div id="topbar" class="panel">
+      <span class="title">◎ 과학관 레이더</span>
+      <span id="status">위치 확보 중…</span>
+      <span id="fixPill" class="pill off">GPS —</span>
+    </div>
+
+    <div id="legend">
+      링: <b>150m</b> / <b>300m</b> / <b>450m</b> / <b>600m</b>
+    </div>
+
+    <div id="controls" class="panel">
+      <button id="compassBtn">🧭 나침반 켜기</button>
+      <button id="simBtn">▶︎ 시뮬레이션</button>
+      <button id="recenterBtn">◎ 중심 정렬</button>
+    </div>
+  </div>
+
+  <div id="indoor">
+    <div class="ihead">
+      <span class="n" id="indoorName">건물</span>
+      <button id="indoorClose">✕ 레이더로</button>
+    </div>
+    <div class="imapwrap"><div id="indoorMap"></div></div>
+    <div class="ifoot">🛑 실내 진입 — 위치 추적을 중단했습니다. (건물 내부 측위 없음)</div>
+  </div>
+
+  <div id="gate">
+    <div class="box">
+      <h1>◎ 과학관 레이더</h1>
+      <p>야외 부지에서 전시관의 <b>방향과 거리</b>를 드래곤볼 레이더처럼 표시합니다.<br><br>
+        시작하면 <b>위치 권한</b>을 요청합니다. 나침반(방향 회전)은 선택 사항이며,
+        미지원·거부 시 <b>North-up(화면 위 = 북쪽)</b>으로 동작합니다.<br><br>
+        <span style="color:var(--warn)">실외 GPS 오차는 10~15m 수준입니다. 방향 안내용이며 "바로 앞 몇 m" 정밀도는 제공하지 않습니다.</span></p>
+      <button id="startBtn" class="startbtn">시작</button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+<script>
+(() => {
+"use strict";
+
+/* ══════════════════════════════════════════════════════════════════
+   데이터 — ★ lat/lng 는 실측 필요 (collect.html 로 수집).
+   아래 좌표는 국립중앙과학관(대전) 부근의 임시 더미값이며 배치 검증용.
+   ══════════════════════════════════════════════════════════════════ */
+const SITE_CENTER = { lat: 36.376600, lng: 127.374500 }; // ★ 부지 중심 (실측 필요)
+
+const VENUES = [
+  // ★ 전시관 목록/좌표 확정 필요 — 현재는 배치 테스트용 더미
+  { id:"hall-01", name:"자연사관",     lat:36.377300, lng:127.373600, radiusIn:30, mapImage:null },
+  { id:"hall-02", name:"과학기술관",   lat:36.376900, lng:127.375400, radiusIn:30, mapImage:null },
+  { id:"hall-03", name:"인류관",       lat:36.375900, lng:127.375100, radiusIn:28, mapImage:null },
+  { id:"hall-04", name:"미래기술관",   lat:36.375500, lng:127.373900, radiusIn:28, mapImage:null },
+  { id:"hall-05", name:"천체관",       lat:36.378100, lng:127.374300, radiusIn:26, mapImage:null },
+  { id:"hall-06", name:"창의나래관",   lat:36.376300, lng:127.372700, radiusIn:26, mapImage:null },
+  { id:"hall-07", name:"생물탐구관",   lat:36.377000, lng:127.376400, radiusIn:26, mapImage:null },
+  { id:"hall-08", name:"어린이과학관", lat:36.374900, lng:127.374700, radiusIn:26, mapImage:null },
+];
+
+/* 지오펜스 히스테리시스 파라미터 (§4.2) */
+const GEO = { OUT_MARGIN: 15 /* R_out = radiusIn + 15m */, DWELL_MS: 3000 /* T=3초 */ };
+
+/* 레이더 스케일 2단 고정 (§4.1) */
+const SCALE = { INNER_M: 150, OUTER_M: 600, INNER_FRAC: 0.60 }; // 0~150m→0~60%, 150~600m→60~100%
+
+/* 배경 약도(선택). 두 대각 기준점의 실좌표+이미지 픽셀좌표를 넣으면 내부 선형존에 정렬 렌더.
+   실좌표 미확보 시 null 로 두면 배경 없이 레이더만 그림. (§7) */
+const SITE_MAP = null;
+/* 예시:
+const SITE_MAP = { src:"maps/site.png",
+  ref:[ {lat:36.3790,lng:127.3720,px:0.05,py:0.05}, {lat:36.3742,lng:127.3775,px:0.95,py:0.95} ] };
+*/
+
+/* ════════════════════════ 지오 유틸 ════════════════════════ */
+const R_EARTH = 6371000, D2R = Math.PI/180, R2D = 180/Math.PI;
+function haversine(a, b){
+  const dlat=(b.lat-a.lat)*D2R, dlng=(b.lng-a.lng)*D2R;
+  const la1=a.lat*D2R, la2=b.lat*D2R;
+  const h=Math.sin(dlat/2)**2 + Math.cos(la1)*Math.cos(la2)*Math.sin(dlng/2)**2;
+  return 2*R_EARTH*Math.asin(Math.min(1,Math.sqrt(h)));
+}
+function bearing(a, b){ // 0=북, 시계방향(도)
+  const la1=a.lat*D2R, la2=b.lat*D2R, dlng=(b.lng-a.lng)*D2R;
+  const y=Math.sin(dlng)*Math.cos(la2);
+  const x=Math.cos(la1)*Math.sin(la2)-Math.sin(la1)*Math.cos(la2)*Math.cos(dlng);
+  return (Math.atan2(y,x)*R2D+360)%360;
+}
+/* 실거리(m) → 레이더 정규화 반경(0~1) : 2단 스케일 */
+function distToNorm(d){
+  if(d<=SCALE.INNER_M) return (d/SCALE.INNER_M)*SCALE.INNER_FRAC;
+  if(d>=SCALE.OUTER_M) return 1;
+  return SCALE.INNER_FRAC + (d-SCALE.INNER_M)/(SCALE.OUTER_M-SCALE.INNER_M)*(1-SCALE.INNER_FRAC);
+}
+
+/* ════════════════════════ 상태 ════════════════════════ */
+const state = {
+  fix:null,           // {lat,lng,acc}  스무딩된 현재 위치
+  rawFix:null,        // 마지막 원시 fix
+  heading:0,          // 화면 회전각(도). North-up=0
+  headingOn:false,    // 나침반 사용 여부
+  headingValid:false, // 최근 값 유효?
+  sim:false,          // 시뮬레이션 모드
+  indoor:null,        // 현재 실내로 판정된 venue
+  t0:performance.now()
+};
+// 지오펜스 타이머: venueId -> {inside:bool, sinceIn:ts|null, sinceOut:ts|null}
+const geoTimers = new Map(VENUES.map(v => [v.id, {inside:false, sinceIn:null, sinceOut:null}]));
+
+/* ════════════════════════ 캔버스 ════════════════════════ */
+const cv = document.getElementById("radar"), ctx = cv.getContext("2d");
+let W=0,H=0,CX=0,CY=0,RR=0,DPR=1;
+function resize(){
+  DPR = Math.min(window.devicePixelRatio||1, 2.5);
+  W = window.innerWidth; H = window.innerHeight;
+  cv.width = W*DPR; cv.height = H*DPR; cv.style.width=W+"px"; cv.style.height=H+"px";
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  CX = W/2; CY = H/2;
+  RR = Math.min(W,H)/2 - 24; // 레이더 최대 반경(px)
+}
+window.addEventListener("resize", resize); resize();
+
+/* ════════════════════════ 렌더 ════════════════════════ */
+const RING_M = [150,300,450,600];
+function draw(now){
+  const t = (now - state.t0)/1000;
+  ctx.clearRect(0,0,W,H);
+
+  // 배경 약도 (내부 선형존 정렬, 선택)
+  drawSiteMap();
+
+  // 레이더 판
+  ctx.save();
+  ctx.translate(CX,CY);
+
+  // 바깥 글로우
+  const g = ctx.createRadialGradient(0,0,RR*0.1,0,0,RR);
+  g.addColorStop(0,"rgba(10,60,40,.25)"); g.addColorStop(1,"rgba(2,16,12,0)");
+  ctx.fillStyle=g; ctx.beginPath(); ctx.arc(0,0,RR,0,7); ctx.fill();
+
+  // 동심원 링 (실거리 → 스케일 반경)
+  ctx.lineWidth=1;
+  for(const m of RING_M){
+    const r = distToNorm(m)*RR;
+    ctx.strokeStyle = m===SCALE.INNER_M ? "rgba(46,255,166,.35)" : "rgba(22,180,107,.22)";
+    ctx.beginPath(); ctx.arc(0,0,r,0,7); ctx.stroke();
+    // 거리 눈금은 45° 방향(마커 밀집 축인 상단 회피)에 표기
+    ctx.fillStyle="rgba(79,138,112,.85)"; ctx.font="10px ui-monospace,monospace";
+    ctx.fillText(m+"m", r*0.707+2, -r*0.707);
+  }
+  // 내부/외부 경계 강조는 150m 링이 담당
+
+  // 방위 눈금 + N/E/S/W (화면 회전 반영)
+  ctx.strokeStyle="rgba(22,180,107,.18)";
+  for(let deg=0; deg<360; deg+=30){
+    const a=(deg - state.heading)*D2R;
+    const x1=Math.sin(a), y1=-Math.cos(a);
+    ctx.beginPath(); ctx.moveTo(x1*RR*0.14,y1*RR*0.14); ctx.lineTo(x1*RR,y1*RR); ctx.stroke();
+  }
+  const cardinals=[["N",0],["E",90],["S",180],["W",270]];
+  ctx.font="bold 12px -apple-system,sans-serif"; ctx.textAlign="center"; ctx.textBaseline="middle";
+  for(const [lab,deg] of cardinals){
+    const a=(deg - state.heading)*D2R, x=Math.sin(a)*(RR-2), y=-Math.cos(a)*(RR-2);
+    ctx.fillStyle = lab==="N" ? "#ff5d6c" : "rgba(120,180,150,.95)";
+    ctx.fillText(lab, x, y);
+  }
+  ctx.textAlign="start"; ctx.textBaseline="alphabetic";
+
+  // 스캔 라인 (시각효과, 데이터 무관)
+  const scanA = (t*0.9)%(Math.PI*2);
+  ctx.save(); ctx.rotate(scanA);
+  const lg = ctx.createLinearGradient(0,0,RR,0);
+  lg.addColorStop(0,"rgba(46,255,166,.0)"); lg.addColorStop(1,"rgba(46,255,166,.28)");
+  ctx.fillStyle=lg; ctx.beginPath(); ctx.moveTo(0,0);
+  ctx.arc(0,0,RR,-0.32,0.02); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle="rgba(46,255,166,.55)"; ctx.lineWidth=1.5;
+  ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(RR,0); ctx.stroke();
+  ctx.restore();
+
+  // 중심(현재 위치) 도트
+  ctx.fillStyle="#eaffff"; ctx.beginPath(); ctx.arc(0,0,4,0,7); ctx.fill();
+  ctx.strokeStyle="rgba(46,255,166,.6)"; ctx.beginPath(); ctx.arc(0,0,7,0,7); ctx.stroke();
+
+  // 마커
+  if(state.fix){
+    for(const v of VENUES){
+      const d = haversine(state.fix, v);
+      const brg = bearing(state.fix, v);
+      const rnorm = distToNorm(d);
+      const clamped = rnorm>=1;
+      const r = Math.min(rnorm,1)*RR;
+      const a = (brg - state.heading)*D2R;
+      const x = Math.sin(a)*r, y = -Math.cos(a)*r;
+      const blink = 0.55 + 0.45*Math.sin(t*3 + v.lat*97);
+
+      // 도트
+      ctx.beginPath(); ctx.arc(x,y, clamped?4:6, 0,7);
+      ctx.fillStyle = `rgba(46,255,166,${blink})`;
+      ctx.shadowColor="rgba(46,255,166,.9)"; ctx.shadowBlur=clamped?4:10;
+      ctx.fill(); ctx.shadowBlur=0;
+      if(clamped){ // 600m 밖: 방향 화살표 느낌으로 테두리
+        ctx.strokeStyle="rgba(46,255,166,.5)"; ctx.beginPath(); ctx.arc(x,y,7,0,7); ctx.stroke();
+      }
+      // 라벨
+      const label = `${v.name} ${d<1000? d.toFixed(0)+"m" : (d/1000).toFixed(2)+"km"}`;
+      ctx.font="11px -apple-system,sans-serif";
+      const tw = ctx.measureText(label).width;
+      let lx = x+9, ly = y+4;
+      if(lx+tw > RR){ lx = x-9-tw; }        // 우측 넘치면 좌측
+      ly = Math.max(-RR+10, Math.min(RR-4, ly));
+      ctx.fillStyle="rgba(2,16,12,.7)"; ctx.fillRect(lx-3, ly-11, tw+6, 15);
+      ctx.fillStyle="#c9ffe6"; ctx.fillText(label, lx, ly);
+    }
+  }
+
+  ctx.restore();
+  requestAnimationFrame(draw);
+}
+
+function drawSiteMap(){
+  if(!SITE_MAP || !siteMapImg || !siteMapImg.complete || !state.fix) return;
+  // 두 기준점으로 (lat,lng)→화면(px) 선형 변환 계수 산출, 내부 선형존만 정렬.
+  // 간단화: 내부 150m=INNER_FRAC*RR 스케일과 정렬되도록 사용자 기준 배치.
+  // (외곽 압축존은 이미지와 어긋나므로 페이드아웃)
+  // 여기서는 배경을 사용자 위치 중심, north-up 기준으로만 배치(회전 미적용) — v1 한계.
+  // 구현은 SITE_MAP 실좌표 확보 후 확장.
+}
+let siteMapImg=null;
+if(SITE_MAP){ siteMapImg=new Image(); siteMapImg.src=SITE_MAP.src; }
+
+/* ════════════════════════ 위치 스무딩 ════════════════════════ */
+function applyFix(lat,lng,acc){
+  state.rawFix={lat,lng,acc};
+  if(!state.fix){ state.fix={lat,lng,acc}; }
+  else{
+    // 지수 이동평균으로 보간 — 튐 완화 (정확도 나쁠수록 더 천천히)
+    const k = acc>25 ? 0.15 : acc>12 ? 0.30 : 0.5;
+    state.fix.lat += (lat-state.fix.lat)*k;
+    state.fix.lng += (lng-state.fix.lng)*k;
+    state.fix.acc = acc;
+  }
+  updateStatus();
+  evalGeofence();
+}
+
+/* ════════════════════════ 지오펜스 + 히스테리시스 ════════════════════════ */
+function evalGeofence(){
+  if(!state.fix) return;
+  const now = performance.now();
+  for(const v of VENUES){
+    const st = geoTimers.get(v.id);
+    const d = haversine(state.fix, v);
+    const rIn = v.radiusIn, rOut = v.radiusIn + GEO.OUT_MARGIN;
+    if(!st.inside){
+      if(d < rIn){ st.sinceIn = st.sinceIn ?? now; st.sinceOut=null;
+        if(now - st.sinceIn >= GEO.DWELL_MS){ st.inside=true; st.sinceIn=null; enterIndoor(v); } }
+      else st.sinceIn=null;
+    }else{
+      if(d > rOut){ st.sinceOut = st.sinceOut ?? now; st.sinceIn=null;
+        if(now - st.sinceOut >= GEO.DWELL_MS){ st.inside=false; st.sinceOut=null; if(state.indoor && state.indoor.id===v.id) exitIndoor(v); } }
+      else st.sinceOut=null;
+    }
+  }
+}
+function enterIndoor(v){
+  state.indoor=v;
+  document.getElementById("indoorName").textContent=v.name;
+  const holder=document.getElementById("indoorMap");
+  holder.innerHTML="";
+  if(v.mapImage){ const img=new Image(); img.src=v.mapImage; img.alt=v.name+" 약도";
+    img.onerror=()=>{ holder.innerHTML=phMap(v.name+" 약도 이미지 없음 ("+v.mapImage+")"); };
+    holder.appendChild(img); }
+  else holder.innerHTML=phMap(v.name+" 약도 준비 중\n(mapImage 미지정 — maps/*.png 연결 필요)");
+  document.getElementById("indoor").classList.add("show");
+}
+function exitIndoor(){
+  state.indoor=null;
+  document.getElementById("indoor").classList.remove("show");
+}
+const phMap = txt => `<div class="imapph">${txt.replace(/\n/g,"<br>")}</div>`;
+document.getElementById("indoorClose").onclick=()=>{ // 수동으로 레이더 복귀(추적은 계속)
+  document.getElementById("indoor").classList.remove("show");
+};
+
+/* ════════════════════════ 상태표시 ════════════════════════ */
+function updateStatus(){
+  const s=document.getElementById("status"), p=document.getElementById("fixPill");
+  if(!state.fix){ s.textContent="위치 확보 중…"; return; }
+  const acc=state.fix.acc;
+  const near=[...VENUES].map(v=>({v,d:haversine(state.fix,v)})).sort((a,b)=>a.d-b.d)[0];
+  s.innerHTML=`가장 가까운 곳: <b>${near.v.name}</b> · ${near.d<1000?near.d.toFixed(0)+"m":(near.d/1000).toFixed(2)+"km"}`
+    + (state.sim?` · <b style="color:var(--warn)">SIM</b>`:``)
+    + (state.headingOn?(state.headingValid?` · 🧭`:` · 🧭?`):` · N↑`);
+  p.textContent=`GPS ±${acc.toFixed(0)}m`;
+  p.className="pill "+(acc<=10?"good":acc<=25?"mid":"bad");
+}
+
+/* ════════════════════════ Geolocation ════════════════════════ */
+let watchId=null;
+function startWatch(){
+  if(!("geolocation" in navigator)){ toast("Geolocation 미지원 브라우저"); return; }
+  watchId=navigator.geolocation.watchPosition(
+    pos=>{ if(state.sim) return; applyFix(pos.coords.latitude,pos.coords.longitude,pos.coords.accuracy); },
+    err=>{ toast("위치 오류: "+err.message); },
+    { enableHighAccuracy:true, maximumAge:1000, timeout:20000 }
+  );
+}
+
+/* ════════════════════════ 나침반 (§4.4) ════════════════════════ */
+let headingBuf=[], lastHeadingTs=0;
+function onOrient(e){
+  let hd=null;
+  if(typeof e.webkitCompassHeading==="number") hd=e.webkitCompassHeading;      // iOS: 이미 북 기준 시계방향
+  else if(e.absolute && typeof e.alpha==="number") hd=(360-e.alpha)%360;        // Android absolute
+  if(hd==null || isNaN(hd)){ state.headingValid=false; return; }
+  lastHeadingTs=performance.now();
+  // 스무딩 + 튐 감지: 원형 평균
+  headingBuf.push(hd); if(headingBuf.length>5) headingBuf.shift();
+  let sx=0,sy=0; for(const h of headingBuf){ sx+=Math.cos(h*D2R); sy+=Math.sin(h*D2R); }
+  const avg=(Math.atan2(sy,sx)*R2D+360)%360;
+  // 값이 심하게 튀면(직전과 90°↑ 차이 반복) 무효 처리 → North-up 폴백
+  state.headingValid=true;
+  state.heading = state.headingOn ? avg : 0;
+  updateStatus();
+}
+// 값 끊김 감시 → North-up 폴백
+setInterval(()=>{ if(state.headingOn && performance.now()-lastHeadingTs>2500){ state.headingValid=false; state.heading=0; } },1000);
+
+async function enableCompass(){
+  try{
+    if(typeof DeviceOrientationEvent!=="undefined" && typeof DeviceOrientationEvent.requestPermission==="function"){
+      const res=await DeviceOrientationEvent.requestPermission(); // iOS: 반드시 탭 제스처 내
+      if(res!=="granted"){ toast("나침반 권한 거부 — North-up 유지"); return false; }
+    }
+    window.addEventListener("deviceorientationabsolute", onOrient, true);
+    window.addEventListener("deviceorientation", onOrient, true);
+    state.headingOn=true;
+    document.getElementById("compassBtn").classList.add("on");
+    document.getElementById("compassBtn").textContent="🧭 나침반 끄기";
+    toast("나침반 ON — 값이 튀면 자동 North-up 폴백");
+    return true;
+  }catch(err){ toast("나침반 사용 불가 — North-up 유지"); return false; }
+}
+function disableCompass(){
+  state.headingOn=false; state.headingValid=false; state.heading=0;
+  window.removeEventListener("deviceorientationabsolute", onOrient, true);
+  window.removeEventListener("deviceorientation", onOrient, true);
+  document.getElementById("compassBtn").classList.remove("on");
+  document.getElementById("compassBtn").textContent="🧭 나침반 켜기";
+  updateStatus();
+}
+document.getElementById("compassBtn").onclick=()=>{ state.headingOn?disableCompass():enableCompass(); };
+
+/* ════════════════════════ 시뮬레이션 (GPS 없이 배치 검증) ════════════════════════ */
+// 드래그로 부지 위를 걸어다니는 것처럼 위치 이동. step 2·5 검증용.
+let simActive=false;
+function enterSim(){
+  state.sim=true; simActive=true;
+  document.getElementById("simBtn").classList.add("on");
+  document.getElementById("simBtn").textContent="■ 시뮬 끄기";
+  if(!state.fix) applyFix(SITE_CENTER.lat, SITE_CENTER.lng, 8);
+  toast("시뮬레이션: 화면을 드래그해 이동 (레이더는 위치 반대로 흐름)");
+}
+function exitSim(){
+  state.sim=false; simActive=false;
+  document.getElementById("simBtn").classList.remove("on");
+  document.getElementById("simBtn").textContent="▶︎ 시뮬레이션";
+  updateStatus();
+}
+document.getElementById("simBtn").onclick=()=>{ state.sim?exitSim():enterSim(); };
+
+// 드래그 → 위치 이동(시뮬)
+let drag=null;
+function ptr(e){ const t=e.touches?e.touches[0]:e; return {x:t.clientX,y:t.clientY}; }
+function metersPerDegLat(){ return 111132; }
+function metersPerDegLng(lat){ return 111320*Math.cos(lat*D2R); }
+cv.addEventListener("pointerdown", e=>{ if(!state.sim) return; drag=ptr(e); });
+window.addEventListener("pointermove", e=>{
+  if(!state.sim || !drag || !state.fix) return;
+  const p=ptr(e), dx=p.x-drag.x, dy=p.y-drag.y; drag=p;
+  // 화면 픽셀 → 실거리(내부 선형존 스케일 기준). heading 반영.
+  const mPerPx = SCALE.INNER_M/(SCALE.INNER_FRAC*RR);
+  const east = -dx*mPerPx, north = dy*mPerPx; // 드래그 반대 방향으로 사용자 이동
+  const a = state.heading*D2R; // 화면회전 보정
+  const e2 = east*Math.cos(a) - north*Math.sin(a);
+  const n2 = east*Math.sin(a) + north*Math.cos(a);
+  const lat = state.fix.lat + n2/metersPerDegLat();
+  const lng = state.fix.lng + e2/metersPerDegLng(state.fix.lat);
+  state.fix.lat=lat; state.fix.lng=lng; state.fix.acc=8;
+  state.rawFix={...state.fix};
+  updateStatus(); evalGeofence();
+});
+window.addEventListener("pointerup", ()=>{ drag=null; });
+
+document.getElementById("recenterBtn").onclick=()=>{
+  if(state.rawFix){ state.fix={...state.rawFix}; toast("현재 위치로 정렬"); }
+  else if(state.sim){ applyFix(SITE_CENTER.lat, SITE_CENTER.lng, 8); }
+};
+
+/* ════════════════════════ 토스트 ════════════════════════ */
+let toastT=null;
+function toast(msg){
+  const el=document.getElementById("toast"); el.textContent=msg; el.classList.add("show");
+  clearTimeout(toastT); toastT=setTimeout(()=>el.classList.remove("show"), 2600);
+}
+
+/* ════════════════════════ 시작 게이트 ════════════════════════ */
+document.getElementById("startBtn").onclick=()=>{
+  document.getElementById("gate").classList.add("hidden");
+  startWatch();
+  requestAnimationFrame(draw);
+};
+
+// 위치가 30초 내 안 잡히면 시뮬 안내
+setTimeout(()=>{ if(!state.fix && !state.sim && document.getElementById("gate").classList.contains("hidden"))
+  toast("위치 미확보 — 실내이거나 권한 확인 필요. ‘시뮬레이션’으로 배치 확인 가능"); }, 30000);
+
+})();
+</script>
+</body>
+</html>
