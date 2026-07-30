@@ -118,17 +118,20 @@
    ══════════════════════════════════════════════════════════════════ */
 const SITE_CENTER = { lat: 36.376600, lng: 127.374500 }; // ★ 부지 중심 (실측 필요)
 
+// 확정 6개 전시관. 좌표는 공식 안내도의 상대 배치를 참조한 ★더미(실측 필요).
+// mapImage: 실내 진입 시 표시. null 이면 자체 부지 도식(buildSiteMapSVG)에서 해당 관 하이라이트.
 const VENUES = [
-  // ★ 전시관 목록/좌표 확정 필요 — 현재는 배치 테스트용 더미
-  { id:"hall-01", name:"자연사관",     lat:36.377300, lng:127.373600, radiusIn:30, mapImage:null },
-  { id:"hall-02", name:"과학기술관",   lat:36.376900, lng:127.375400, radiusIn:30, mapImage:null },
-  { id:"hall-03", name:"인류관",       lat:36.375900, lng:127.375100, radiusIn:28, mapImage:null },
-  { id:"hall-04", name:"미래기술관",   lat:36.375500, lng:127.373900, radiusIn:28, mapImage:null },
-  { id:"hall-05", name:"천체관",       lat:36.378100, lng:127.374300, radiusIn:26, mapImage:null },
-  { id:"hall-06", name:"창의나래관",   lat:36.376300, lng:127.372700, radiusIn:26, mapImage:null },
-  { id:"hall-07", name:"생물탐구관",   lat:36.377000, lng:127.376400, radiusIn:26, mapImage:null },
-  { id:"hall-08", name:"어린이과학관", lat:36.374900, lng:127.374700, radiusIn:26, mapImage:null },
+  { id:"hall-nature",   name:"자연사관",     lat:36.376960, lng:127.373160, radiusIn:30, mapImage:null }, // S1 중앙 서
+  { id:"hall-tech",     name:"과학기술관",   lat:36.376690, lng:127.374720, radiusIn:30, mapImage:null }, // N1 중앙
+  { id:"hall-future",   name:"미래기술관",   lat:36.377230, lng:127.374050, radiusIn:28, mapImage:null }, // 중앙 북
+  { id:"hall-nari",     name:"창의나래관",   lat:36.375790, lng:127.372710, radiusIn:28, mapImage:null }, // S3 남서
+  { id:"hall-children", name:"어린이과학관", lat:36.376420, lng:127.371820, radiusIn:28, mapImage:null }, // S4 서
+  { id:"hall-bio",      name:"생물탐구관",   lat:36.375340, lng:127.376510, radiusIn:26, mapImage:null }, // N8 남동(돔)
 ];
+
+// 부지 도식(SVG) 좌표계 — 위경도 → viewBox(1000×700) 선형 매핑용 경계.
+// 배경 도식 요소(광장·통로·하천)와 마커 배치가 같은 공간을 공유하도록 한 곳에서 정의.
+const SITE_BOUNDS = { lngMin:127.37050, lngMax:127.37750, latMin:36.37450, latMax:36.37850, VW:1000, VH:700 };
 
 /* 지오펜스 히스테리시스 파라미터 (§4.2) */
 const GEO = { OUT_MARGIN: 15 /* R_out = radiusIn + 15m */, DWELL_MS: 3000 /* T=3초 */ };
@@ -163,6 +166,12 @@ function distToNorm(d){
   if(d<=SCALE.INNER_M) return (d/SCALE.INNER_M)*SCALE.INNER_FRAC;
   if(d>=SCALE.OUTER_M) return 1;
   return SCALE.INNER_FRAC + (d-SCALE.INNER_M)/(SCALE.OUTER_M-SCALE.INNER_M)*(1-SCALE.INNER_FRAC);
+}
+/* 위경도 → 부지 도식 좌표(px). 위=북(latMax가 y=0) 선형 매핑. */
+function latlngToSite(lat,lng){
+  const b=SITE_BOUNDS;
+  return { x:(lng-b.lngMin)/(b.lngMax-b.lngMin)*b.VW,
+           y:(b.latMax-lat)/(b.latMax-b.latMin)*b.VH };
 }
 
 /* ════════════════════════ 상태 ════════════════════════ */
@@ -316,6 +325,10 @@ function applyFix(lat,lng,acc){
 }
 
 /* ════════════════════════ 지오펜스 + 히스테리시스 ════════════════════════ */
+// dwell(T초 지속) 판정은 위치 이벤트와 무관하게 주기적으로 돌려야 한다.
+// (관 안에 정지해 있으면 watchPosition 콜백이 안 와서 진입 판정이 누락됨)
+setInterval(()=>{ if(state.fix) evalGeofence(); }, 500);
+
 function evalGeofence(){
   if(!state.fix) return;
   const now = performance.now();
@@ -339,20 +352,79 @@ function enterIndoor(v){
   document.getElementById("indoorName").textContent=v.name;
   const holder=document.getElementById("indoorMap");
   holder.innerHTML="";
-  if(v.mapImage){ const img=new Image(); img.src=v.mapImage; img.alt=v.name+" 약도";
-    img.onerror=()=>{ holder.innerHTML=phMap(v.name+" 약도 이미지 없음 ("+v.mapImage+")"); };
-    holder.appendChild(img); }
-  else holder.innerHTML=phMap(v.name+" 약도 준비 중\n(mapImage 미지정 — maps/*.png 연결 필요)");
+  if(v.mapImage){ // 관별 상세 약도 이미지가 있으면 우선 사용
+    const img=new Image(); img.src=v.mapImage; img.alt=v.name+" 약도";
+    img.onerror=()=>{ holder.innerHTML=buildSiteMapSVG(v.id); }; // 실패 시 자체 도식으로
+    holder.appendChild(img);
+  } else { // 상세도 없으면 자체 부지 도식에서 현재 관 하이라이트
+    holder.innerHTML=buildSiteMapSVG(v.id);
+  }
   document.getElementById("indoor").classList.add("show");
 }
 function exitIndoor(){
   state.indoor=null;
   document.getElementById("indoor").classList.remove("show");
 }
-const phMap = txt => `<div class="imapph">${txt.replace(/\n/g,"<br>")}</div>`;
 document.getElementById("indoorClose").onclick=()=>{ // 수동으로 레이더 복귀(추적은 계속)
   document.getElementById("indoor").classList.remove("show");
 };
+
+/* ────────────────────────────────────────────────────────────
+   자체 부지 도식(SVG). 공식 안내도의 배치를 참조해 픽셀 재현(§9-4 허용).
+   실내 진입 시 highlightId 관을 강조해 전체화면 약도로 표시.
+   관별 상세 약도(maps/*.png)가 준비되면 VENUES[].mapImage 로 자동 대체됨.
+   ──────────────────────────────────────────────────────────── */
+// 도식 분위기용 비강조 시설 (안내도 참조 · 실측 아님). 위경도 더미로만 배치.
+const SITE_DECOR = [
+  { name:"사이언스홀", lat:36.377150, lng:127.372000, w:100, h:66 },
+  { name:"천체관",     lat:36.376560, lng:127.375650, w:80,  h:60, dome:true },
+  { name:"우주과학공원", lat:36.377680, lng:127.374350, w:90, h:55 },
+];
+function svgEsc(s){ return String(s).replace(/[<>&]/g, c=>({"<":"&lt;",">":"&gt;","&":"&amp;"}[c])); }
+
+function buildSiteMapSVG(highlightId){
+  const b=SITE_BOUNDS;
+  const blocks=[];
+
+  // 배경: 남측 하천(갑천) 밴드 + 중앙 광장
+  blocks.push(`<path d="M0,${b.VH} L0,${b.VH-70} L${b.VW},${b.VH-160} L${b.VW},${b.VH} Z" fill="#07211a" opacity=".7"/>`);
+  blocks.push(`<circle cx="${b.VW*0.42}" cy="${b.VH*0.47}" r="44" fill="none" stroke="#124e38" stroke-dasharray="4 5"/>`);
+  blocks.push(`<text x="${b.VW*0.42}" y="${b.VH*0.47+4}" fill="#2c6b52" font-size="15" text-anchor="middle">과학광장</text>`);
+
+  // 비강조 시설(컨텍스트)
+  for(const d of SITE_DECOR){
+    const p=latlngToSite(d.lat,d.lng), w=d.w||90, h=d.h||60;
+    if(d.dome) blocks.push(`<ellipse cx="${p.x}" cy="${p.y}" rx="${w/2}" ry="${h/2}" fill="#0c2c22" stroke="#1c5a41"/>`);
+    else blocks.push(`<rect x="${p.x-w/2}" y="${p.y-h/2}" width="${w}" height="${h}" rx="8" fill="#0c2c22" stroke="#1c5a41"/>`);
+    blocks.push(`<text x="${p.x}" y="${p.y+5}" fill="#3f8a6f" font-size="15" text-anchor="middle">${svgEsc(d.name)}</text>`);
+  }
+
+  // 전시관(강조 대상 6개)
+  for(const v of VENUES){
+    const p=latlngToSite(v.lat,v.lng), hot=v.id===highlightId;
+    const dome=v.id==="hall-bio", w=110, h=72;
+    const fill=hot?"#0f5c3f":"#123a2b", stroke=hot?"#2effa6":"#1f6b4c", sw=hot?3:1.4;
+    const glow=hot?` filter="url(#g)"`:``;
+    if(dome) blocks.push(`<ellipse cx="${p.x}" cy="${p.y}" rx="${w/2}" ry="${h/2}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"${glow}/>`);
+    else blocks.push(`<rect x="${p.x-w/2}" y="${p.y-h/2}" width="${w}" height="${h}" rx="10" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"${glow}/>`);
+    blocks.push(`<text x="${p.x}" y="${p.y+6}" fill="${hot?'#eaffff':'#8fd9bb'}" font-size="${hot?19:16}" font-weight="${hot?700:600}" text-anchor="middle">${svgEsc(v.name)}</text>`);
+    if(hot){ // 현재 위치 핀
+      blocks.push(`<circle cx="${p.x}" cy="${p.y-h/2-16}" r="9" fill="#2effa6"${glow}/>`);
+      blocks.push(`<path d="M${p.x-7},${p.y-h/2-12} L${p.x+7},${p.y-h/2-12} L${p.x},${p.y-h/2} Z" fill="#2effa6"/>`);
+      blocks.push(`<text x="${p.x}" y="${p.y-h/2-30}" fill="#2effa6" font-size="15" font-weight="700" text-anchor="middle">현재 위치</text>`);
+    }
+  }
+
+  return `<svg viewBox="0 0 ${b.VW} ${b.VH}" xmlns="http://www.w3.org/2000/svg"
+    style="width:100%;height:auto;max-height:100%;background:#04140e;border-radius:10px" role="img" aria-label="부지 약도">
+    <defs><filter id="g" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter></defs>
+    <g font-family="-apple-system,sans-serif">${blocks.join("")}</g>
+    <g transform="translate(${b.VW-60},46)"><line x1="0" y1="26" x2="0" y2="-6" stroke="#ff5d6c" stroke-width="2"/>
+      <path d="M-5,2 L5,2 L0,-8 Z" fill="#ff5d6c"/><text x="0" y="42" fill="#ff5d6c" font-size="14" text-anchor="middle" font-family="sans-serif">N</text></g>
+  </svg>`;
+}
 
 /* ════════════════════════ 상태표시 ════════════════════════ */
 function updateStatus(){
