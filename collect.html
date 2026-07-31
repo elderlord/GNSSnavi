@@ -102,6 +102,8 @@
   //   해상해야 한다. ±12m 까지는 '정문 앞 진입 ≥95%, 45m 밖 오진입 ≤5%'를 만족하지만
   //   ±15m 부터 무너진다(±21m 이면 정문 앞 진입 성공률 82%).
   const LOCK_MAX = 12;
+  // 락 판정에 필요한 '기준 이내' 최소 샘플 수. 우연히 잘 나온 한두 개로 통과하는 것을 막는다.
+  const GOOD_MIN = 5;
   const $ = id => document.getElementById(id);
   let watchId = null, samples = [], startedAt = 0, timer = null;
   let locked = false;   // 이번 세션에서 위성 락(≤LOCK_MAX)에 도달했는가
@@ -148,12 +150,15 @@
     $("bestAcc").innerHTML = `<span class="${accClass(bestAcc)}">${fmtAcc(bestAcc)}</span>`;
 
     // ── 양호 샘플만 채택 ──
-    // GPS는 시간이 지나며 좋아진다. 워밍업 구간의 거친 값(WiFi 캐시)이 중앙값을 오염시키므로
-    // '최고 정확도의 1.5배 이내' 샘플만 사용한다. (표본이 너무 적으면 전체 사용)
-    const thr = Math.max(bestAcc * 1.5, bestAcc + 3);
-    let used = samples.filter(s => s.acc <= thr);
-    if (used.length < 5) used = samples;
-    $("nUsed").textContent = `${used.length} / ${n}`;
+    // 기준(LOCK_MAX) 이내 샘플만 좌표 계산에 쓴다. 워밍업 구간의 거친 값이 섞이지 않게 하고,
+    // 동시에 '운 좋은 샘플 한두 개'로 통과하지 않도록 최소 개수(GOOD_MIN)를 요구한다.
+    //   ※ 예전엔 '최고 정확도의 1.5배' 상대 기준 + 표본 부족 시 전체 사용 폴백을 썼는데,
+    //     ±9m 가 2개뿐이고 나머지가 ±22m 인 표본에서 폴백이 걸려 좌표는 ±22m 로 계산되면서도
+    //     게이트는 통과해버렸다(어린이과학관 실제 사례). 그래서 절대 기준으로 단순화했다.
+    const good = samples.filter(s => s.acc <= LOCK_MAX);
+    const used = good.length >= GOOD_MIN ? good : samples;   // 미달이면 참고 표시용으로만 전체 사용
+    $("nUsed").innerHTML = `${good.length} / ${n}`
+      + (good.length < GOOD_MIN ? ` <span class="acc-bad">(양호 ${GOOD_MIN}개 미만)</span>` : '');
 
     const mLat = median(used.map(s => s.lat));
     const mLng = median(used.map(s => s.lng));
@@ -184,31 +189,39 @@
     } else if (bestAcc > 30) {
       cls = "wifi"; msg = "⚠ 정확도 매우 낮음 — WiFi/셀 측위 의심"
         + "<br><span style='font-weight:400;font-size:12px'>WiFi를 끄고 하늘 트인 곳에서 재측정하세요</span>";
-    } else if (bestAcc <= LOCK_MAX) {
-      // 정확도가 기준 이내면 위성 측위로 본다(고도 없어도 양호 판정)
-      cls = "gnss"; msg = `✓ 위성 락 성공 (±${bestAcc.toFixed(0)}m) — 채택 가능` + (hasAlt ? " · 고도 확인됨" : "");
+    } else if (locked) {
+      cls = "gnss"; msg = `✓ 위성 락 성공 — 양호 ${good.length}개 (±${mAcc.toFixed(0)}m) 채택`
+        + (hasAlt ? " · 고도 확인됨" : "");
+    } else if (good.length > 0) {
+      // 양호 샘플이 있긴 하나 개수가 부족한 경우 — 우연히 잘 나온 값에 속지 않도록 명시
+      cls = "weak"; msg = `✗ 채택 불가 — 기준 이내 샘플 ${good.length}개뿐 (${GOOD_MIN}개 이상 필요)`
+        + "<br><span style='font-weight:400;font-size:12px'>그 자리에서 조금 더 기다리거나, 더 트인 곳에서 재측정하세요</span>";
     } else {
-      // 게이트와 같은 문구를 쓴다(배너는 '권장', 실제는 '차단'이면 오해를 부름)
       cls = "weak"; msg = `✗ 채택 불가 — 정확도 ±${bestAcc.toFixed(0)}m (기준 ±${LOCK_MAX}m 이하)`
         + "<br><span style='font-weight:400;font-size:12px'>WiFi를 끄고 더 트인 곳에서 재측정하세요</span>";
     }
     ft.className = "fixtype " + cls; ft.innerHTML = msg;
     // ── 품질 게이트 ──
-    // 위성 락(≤LOCK_MAX)에 도달하지 못한 세션은 좌표를 내주지 않는다.
-    // 네트워크 측위(±20m대)를 VENUES 에 넣으면 지오펜스 진입 판정이 무너지기 때문.
-    locked = bestAcc <= LOCK_MAX;
+    // 좌표를 실제로 만든 표본의 품질로 판정한다(최고 정확도 한 개로 판단하지 않는다).
+    // 기준 이내 샘플이 GOOD_MIN 개 이상 모여야 락으로 인정.
+    locked = good.length >= GOOD_MIN;
 
     const quality = frozen ? "WiFi의심(좌표고정)" : bestAcc > 30 ? "WiFi의심(정확도낮음)" : locked ? "위성(양호)" : "락실패";
-    const meta = `// ${quality} · 채택 ${used.length}/${n} · 최고 ±${bestAcc.toFixed(0)}m · 중앙 ±${mAcc.toFixed(0)}m`
+    const meta = `// ${quality} · 양호 ${good.length}/${n} · 최고 ±${bestAcc.toFixed(0)}m · 대표 ±${mAcc.toFixed(0)}m`
       + ` · 산포 ${scat.toFixed(1)}m · ${new Date().toISOString()}`;
 
     if (!locked) {
       // 좌표를 '붙여넣기 가능한 형태'로 내주지 않는다. 참고값만 보여주고 재측정을 안내.
+      // 사유는 두 가지로 갈린다: (a) 전반적으로 정확도 미달  (b) 양호 샘플이 개수 부족
+      const reason = good.length > 0
+        ? `기준 이내(±${LOCK_MAX}m) 샘플이 ${good.length}개뿐 — ${GOOD_MIN}개 이상 필요\n`
+          + `  (좌표는 결국 대표 정확도 ±${mAcc.toFixed(0)}m 수준의 표본으로 계산됩니다)`
+        : `전 구간 정확도 미달 (최고 ±${bestAcc.toFixed(0)}m, 기준 ±${LOCK_MAX}m 이하)`;
       $("snippet").textContent =
-`✗ 채택 불가 — 위성 락 실패 (최고 정확도 ±${bestAcc.toFixed(0)}m, 기준 ±${LOCK_MAX}m 이하)
+`✗ 채택 불가 — ${reason}
 
 이 좌표를 쓰면 진입 판정이 무너집니다.
-  · 관 좌표 오차 ±${bestAcc.toFixed(0)}m + 실시간 위치 오차 ±12m → 합성 ±${Math.round(Math.hypot(bestAcc,12))}m
+  · 관 좌표 오차 ±${mAcc.toFixed(0)}m + 실시간 위치 오차 ±12m → 합성 ±${Math.round(Math.hypot(mAcc,12))}m
   · 진입 반경 28m 를 해상하지 못해, 정문 앞에서도 진입을 놓칠 수 있습니다.
 
 재측정 방법

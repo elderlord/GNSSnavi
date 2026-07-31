@@ -88,6 +88,20 @@ async function runSession(browser, seq) {
     b.snippet.split('\n').find(l => l.includes('lat:')) || '(없음)');
   check('락 성공 세션은 복사 버튼이 활성이다', b.copyDisabled === false);
 
+  // ── 케이스 D: 운 좋은 샘플 몇 개에 속으면 안 된다 (어린이과학관에서 실제 발생) ──
+  // 대부분 ±22m 인데 ±9m 가 두어 개 섞이면, '최고 정확도'만 보고 통과시켜서는 안 된다.
+  // 좌표는 결국 나쁜 표본으로 계산되므로 ±22m 짜리 좌표가 되어버린다.
+  const luckyFew = Array.from({ length: 33 }, (_, i) => ({
+    lat: 36.374665 + Math.sin(i) * 0.000005,
+    lng: 127.376312 + Math.cos(i) * 0.000005,
+    acc: i < 2 ? 9 + i : 22
+  }));
+  const d2 = await runSession(browser, luckyFew);
+  check('양호 샘플이 소수뿐이면 채택하지 않는다',
+    !/lat:\s*3\d\.\d/.test(d2.snippet),
+    d2.snippet.split('\n')[0].slice(0, 60));
+  check('  이 경우 복사 버튼도 비활성', d2.copyDisabled === true);
+
   // ── 케이스 C: 경계값 — 정확히 ±12m 는 통과해야 한다 ──
   const borderline = Array.from({ length: 30 }, (_, i) => ({
     lat: 36.3760 + Math.sin(i) * 0.000004, lng: 127.3750 + Math.cos(i) * 0.000004,
