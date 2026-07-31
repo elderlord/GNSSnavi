@@ -46,6 +46,10 @@
   #indoor.show{display:flex;}
   #indoor .ihead{padding:calc(env(safe-area-inset-top,8px) + 10px) 14px 10px;display:flex;align-items:center;justify-content:space-between;}
   #indoor .ihead .n{font-size:17px;font-weight:700;color:var(--acc);}
+  #indoor .floortabs{display:flex;gap:6px;padding:0 14px 6px;flex-wrap:wrap;justify-content:center;}
+  #indoor .floortabs:empty{display:none;}
+  #indoor .floortabs button{padding:7px 14px;font-size:13px;border-radius:999px;}
+  #indoor .floortabs button.on{background:var(--acc);color:#022;border-color:var(--acc);}
   #indoor .imapwrap{flex:1;display:flex;align-items:center;justify-content:center;overflow:auto;padding:8px;}
   #indoor img{max-width:100%;max-height:100%;object-fit:contain;border-radius:8px;}
   #indoor .imapph{width:88%;max-width:520px;aspect-ratio:4/3;border:1px dashed var(--grid-dim);border-radius:12px;
@@ -91,6 +95,7 @@
       <span class="n" id="indoorName">건물</span>
       <button id="indoorClose">✕ 레이더로</button>
     </div>
+    <div id="floorTabs" class="floortabs"></div>
     <div class="imapwrap"><div id="indoorMap"></div></div>
     <div class="ifoot">🛑 실내 진입 — 위치 추적을 중단했습니다. (건물 내부 측위 없음)</div>
   </div>
@@ -118,8 +123,9 @@
    ══════════════════════════════════════════════════════════════════ */
 const SITE_CENTER = { lat: 36.376600, lng: 127.374500 }; // ★ 부지 중심 (실측 필요)
 
-// 확정 6개 전시관. 좌표는 공식 안내도의 상대 배치를 참조한 ★더미(실측 필요).
-// mapImage: 실내 진입 시 표시. null 이면 자체 부지 도식(buildSiteMapSVG)에서 해당 관 하이라이트.
+// 확정 7개 전시관. 좌표는 공식 안내도의 상대 배치를 참조한 ★더미(실측 필요).
+// 실내 진입 시 약도 표시 우선순위:  floors[] (층별)  >  mapImage (단일)  >  자체 부지 도식 하이라이트
+//   floors: [{ label:"1F", img:"maps/xxx-1f.png" }, ...]  ← 층 구분(수동 탭). 실내는 측위가 없어 자동 층감지 불가.
 const VENUES = [
   { id:"hall-nature",   name:"자연사관",     lat:36.376960, lng:127.373160, radiusIn:30, mapImage:null }, // S1 중앙 서
   { id:"hall-tech",     name:"과학기술관",   lat:36.376690, lng:127.374720, radiusIn:30, mapImage:null }, // N1 중앙
@@ -127,6 +133,12 @@ const VENUES = [
   { id:"hall-nari",     name:"창의나래관",   lat:36.375790, lng:127.372710, radiusIn:28, mapImage:null }, // S3 남서
   { id:"hall-children", name:"어린이과학관", lat:36.376420, lng:127.371820, radiusIn:28, mapImage:null }, // S4 서
   { id:"hall-bio",      name:"생물탐구관",   lat:36.375340, lng:127.376510, radiusIn:26, mapImage:null }, // N8 남동(돔)
+  // N3 천체관 — 벽면 대형 달 인쇄. 층 구분 예시로 floors 배선(이미지 준비 전엔 '준비 중' 표시).
+  { id:"hall-astro",    name:"천체관",       lat:36.376560, lng:127.375650, radiusIn:26,
+    floors:[
+      { label:"1F 천체투영관", img:"maps/hall-astro-1f.png" },
+      { label:"2F 전시·관측",  img:"maps/hall-astro-2f.png" },
+    ] },
 ];
 
 // 부지 도식(SVG) 좌표계 — 위경도 → viewBox(1000×700) 선형 매핑용 경계.
@@ -350,17 +362,38 @@ function evalGeofence(){
 function enterIndoor(v){
   state.indoor=v;
   document.getElementById("indoorName").textContent=v.name;
-  const holder=document.getElementById("indoorMap");
-  holder.innerHTML="";
-  if(v.mapImage){ // 관별 상세 약도 이미지가 있으면 우선 사용
-    const img=new Image(); img.src=v.mapImage; img.alt=v.name+" 약도";
-    img.onerror=()=>{ holder.innerHTML=buildSiteMapSVG(v.id); }; // 실패 시 자체 도식으로
-    holder.appendChild(img);
-  } else { // 상세도 없으면 자체 부지 도식에서 현재 관 하이라이트
-    holder.innerHTML=buildSiteMapSVG(v.id);
+  const tabs=document.getElementById("floorTabs"), holder=document.getElementById("indoorMap");
+  tabs.innerHTML=""; holder.innerHTML="";
+  // 약도 소스 정규화: floors[] > mapImage(단일) > 없음(자체 도식)
+  const floors = (Array.isArray(v.floors) && v.floors.length) ? v.floors
+               : v.mapImage ? [{ label:"", img:v.mapImage }]
+               : null;
+  if(!floors){ holder.innerHTML=buildSiteMapSVG(v.id); document.getElementById("indoor").classList.add("show"); return; }
+  // 층이 2개 이상이거나 라벨이 있으면 층 선택 탭 표시 (실내는 측위 없음 → 수동 전환)
+  if(floors.length>1 || floors[0].label){
+    floors.forEach((f,i)=>{
+      const b=document.createElement("button");
+      b.textContent=f.label || ("층 "+(i+1));
+      b.onclick=()=>showFloor(v, floors, i);
+      tabs.appendChild(b);
+    });
   }
+  showFloor(v, floors, 0);
   document.getElementById("indoor").classList.add("show");
 }
+function showFloor(v, floors, idx){
+  const tabs=document.getElementById("floorTabs"), holder=document.getElementById("indoorMap");
+  [...tabs.children].forEach((b,i)=>b.classList.toggle("on", i===idx));
+  const f=floors[idx]; holder.innerHTML="";
+  const img=new Image(); img.src=f.img; img.alt=v.name+(f.label?" "+f.label:"")+" 약도";
+  img.onerror=()=>{ holder.innerHTML=phFloor(v,f); }; // 이미지 없으면 준비 중 안내
+  holder.appendChild(img);
+}
+const phFloor=(v,f)=>`<div class="imapph"><div style="line-height:1.7">`
+  +`<b>${svgEsc(v.name)}${f.label?" · "+svgEsc(f.label):""}</b> 약도 준비 중<br>`
+  +`<span style="opacity:.55;font-size:11px">${svgEsc(f.img)}</span><br><br>`
+  +`상세 약도 이미지를 <b>maps/</b> 에 넣으면 이 자리에 표시됩니다.`
+  +`</div></div>`;
 function exitIndoor(){
   state.indoor=null;
   document.getElementById("indoor").classList.remove("show");
@@ -377,7 +410,6 @@ document.getElementById("indoorClose").onclick=()=>{ // 수동으로 레이더 �
 // 도식 분위기용 비강조 시설 (안내도 참조 · 실측 아님). 위경도 더미로만 배치.
 const SITE_DECOR = [
   { name:"사이언스홀", lat:36.377150, lng:127.372000, w:100, h:66 },
-  { name:"천체관",     lat:36.376560, lng:127.375650, w:80,  h:60, dome:true },
   { name:"우주과학공원", lat:36.377680, lng:127.374350, w:90, h:55 },
 ];
 function svgEsc(s){ return String(s).replace(/[<>&]/g, c=>({"<":"&lt;",">":"&gt;","&":"&amp;"}[c])); }
