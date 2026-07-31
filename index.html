@@ -84,10 +84,11 @@
     </div>
 
     <div id="controls" class="panel">
-      <button id="compassBtn">🧭 나침반 켜기</button>
+      <button id="compassBtn">🧭 나침반</button>
+      <button id="courseBtn">🚶 진행방향</button>
       <button id="bgBtn">🗺 배경약도</button>
       <button id="simBtn">▶︎ 시뮬레이션</button>
-      <button id="recenterBtn">◎ 중심 정렬</button>
+      <button id="recenterBtn">◎ 정렬 리셋</button>
     </div>
   </div>
 
@@ -191,12 +192,17 @@ function latlngToSite(lat,lng){
 const state = {
   fix:null,           // {lat,lng,acc}  스무딩된 현재 위치
   rawFix:null,        // 마지막 원시 fix
-  heading:0,          // 화면 회전각(도). North-up=0
-  headingOn:false,    // 나침반 사용 여부
-  headingValid:false, // 최근 값 유효?
-  sim:false,          // 시뮬레이션 모드
-  bgOn:false,         // 배경 부지 약도 표시
-  indoor:null,        // 현재 실내로 판정된 venue
+  heading:0,           // 적용된 화면 회전각(도). North-up=0
+  headingMode:'north', // 방향 소스: 'north'|'compass'|'course'|'manual'
+  headingOn:false,     // 나침반 이벤트 리스닝(권한 확보) 여부
+  headingValid:false,  // 나침반 최근 값 유효?
+  compassHeading:0,    // 나침반 방위
+  courseHeading:null,  // GPS 진행방향(course over ground)
+  manualHeading:0,     // 손가락 회전 보정각
+  _courseRef:null,     // 진행방향 계산용 직전 위치
+  sim:false,           // 시뮬레이션 모드
+  bgOn:false,          // 배경 부지 약도 표시
+  indoor:null,         // 현재 실내로 판정된 venue
   t0:performance.now()
 };
 // 지오펜스 타이머: venueId -> {inside:bool, sinceIn:ts|null, sinceOut:ts|null}
@@ -340,8 +346,30 @@ function drawSiteMap(){
   ctx.restore();
 }
 
+/* ════════════════════════ 방향(heading) 소스 관리 ════════════════════════ */
+// 모드별로 적용 회전각 결정. North-up=0 기본. 나침반이 부정확해도 course/manual로 대체.
+function updateHeading(){
+  let h;
+  switch(state.headingMode){
+    case 'compass': h = state.headingValid ? state.compassHeading : 0; break; // 값 없으면 North-up
+    case 'course':  h = state.courseHeading!=null ? state.courseHeading : 0; break;
+    case 'manual':  h = state.manualHeading; break;
+    default:        h = 0; // north
+  }
+  state.heading = h;
+  updateStatus();
+}
+function headingLabel(){
+  switch(state.headingMode){
+    case 'compass': return state.headingValid ? '🧭 나침반' : '🧭 대기(N↑)';
+    case 'course':  return state.courseHeading!=null ? `🚶 진행 ${Math.round(state.courseHeading)}°` : '🚶 걸으면 정렬';
+    case 'manual':  return `🔄 수동 ${Math.round(state.manualHeading)}°`;
+    default:        return 'N↑';
+  }
+}
+
 /* ════════════════════════ 위치 스무딩 ════════════════════════ */
-function applyFix(lat,lng,acc){
+function applyFix(lat,lng,acc,speed=null,crs=null){
   state.rawFix={lat,lng,acc};
   if(!state.fix){ state.fix={lat,lng,acc}; }
   else{
@@ -351,6 +379,17 @@ function applyFix(lat,lng,acc){
     state.fix.lng += (lng-state.fix.lng)*k;
     state.fix.acc = acc;
   }
+  // GPS 진행방향(course over ground): 기기가 heading을 주면 사용, 아니면 원시 위치 이력으로 계산.
+  // 정지 상태(느린 속도/짧은 이동)에서는 갱신하지 않아 마지막 진행방향을 유지한다.
+  const here={lat,lng};
+  if(crs!=null && !isNaN(crs) && speed!=null && speed>0.7){
+    state.courseHeading = crs; state._courseRef = here;
+  } else {
+    const ref=state._courseRef;
+    if(ref){ if(haversine(ref,here) >= 6){ state.courseHeading = bearing(ref,here); state._courseRef = here; } }
+    else state._courseRef = here;
+  }
+  if(state.headingMode==='course') updateHeading();
   updateStatus();
   evalGeofence();
 }
@@ -488,7 +527,7 @@ function updateStatus(){
   const near=[...VENUES].map(v=>({v,d:haversine(state.fix,v)})).sort((a,b)=>a.d-b.d)[0];
   s.innerHTML=`가장 가까운 곳: <b>${near.v.name}</b> · ${near.d<1000?near.d.toFixed(0)+"m":(near.d/1000).toFixed(2)+"km"}`
     + (state.sim?` · <b style="color:var(--warn)">SIM</b>`:``)
-    + (state.headingOn?(state.headingValid?` · 🧭`:` · 🧭?`):` · N↑`);
+    + ` · ${headingLabel()}`;
   p.textContent=`GPS ±${acc.toFixed(0)}m`;
   p.className="pill "+(acc<=10?"good":acc<=25?"mid":"bad");
   // 배경 약도 켜면 좌표 확인용으로 현재 GPS 좌표 표시(탭 복사)
@@ -505,7 +544,7 @@ let watchId=null;
 function startWatch(){
   if(!("geolocation" in navigator)){ toast("Geolocation 미지원 브라우저"); return; }
   watchId=navigator.geolocation.watchPosition(
-    pos=>{ if(state.sim) return; applyFix(pos.coords.latitude,pos.coords.longitude,pos.coords.accuracy); },
+    pos=>{ if(state.sim) return; applyFix(pos.coords.latitude,pos.coords.longitude,pos.coords.accuracy,pos.coords.speed,pos.coords.heading); },
     err=>{ toast("위치 오류: "+err.message); },
     { enableHighAccuracy:true, maximumAge:1000, timeout:20000 }
   );
@@ -523,13 +562,12 @@ function onOrient(e){
   headingBuf.push(hd); if(headingBuf.length>5) headingBuf.shift();
   let sx=0,sy=0; for(const h of headingBuf){ sx+=Math.cos(h*D2R); sy+=Math.sin(h*D2R); }
   const avg=(Math.atan2(sy,sx)*R2D+360)%360;
-  // 값이 심하게 튀면(직전과 90°↑ 차이 반복) 무효 처리 → North-up 폴백
-  state.headingValid=true;
-  state.heading = state.headingOn ? avg : 0;
-  updateStatus();
+  state.compassHeading = avg; state.headingValid = true;
+  if(state.headingMode==='compass') updateHeading();
 }
-// 값 끊김 감시 → North-up 폴백
-setInterval(()=>{ if(state.headingOn && performance.now()-lastHeadingTs>2500){ state.headingValid=false; state.heading=0; } },1000);
+// 값 끊김 감시 → compass 모드면 North-up 폴백
+setInterval(()=>{ if(state.headingOn && performance.now()-lastHeadingTs>2500){
+  state.headingValid=false; if(state.headingMode==='compass') updateHeading(); } },1000);
 
 async function enableCompass(){
   try{
@@ -540,21 +578,30 @@ async function enableCompass(){
     window.addEventListener("deviceorientationabsolute", onOrient, true);
     window.addEventListener("deviceorientation", onOrient, true);
     state.headingOn=true;
-    document.getElementById("compassBtn").classList.add("on");
-    document.getElementById("compassBtn").textContent="🧭 나침반 끄기";
-    toast("나침반 ON — 값이 튀면 자동 North-up 폴백");
     return true;
   }catch(err){ toast("나침반 사용 불가 — North-up 유지"); return false; }
 }
-function disableCompass(){
-  state.headingOn=false; state.headingValid=false; state.heading=0;
-  window.removeEventListener("deviceorientationabsolute", onOrient, true);
-  window.removeEventListener("deviceorientation", onOrient, true);
-  document.getElementById("compassBtn").classList.remove("on");
-  document.getElementById("compassBtn").textContent="🧭 나침반 켜기";
-  updateStatus();
+
+/* ── 방향 모드 전환 ── */
+const compassBtn=document.getElementById("compassBtn"),
+      courseBtn=document.getElementById("courseBtn");
+function setHeadingButtons(){
+  compassBtn.classList.toggle("on", state.headingMode==='compass');
+  courseBtn.classList.toggle("on", state.headingMode==='course');
+  compassBtn.textContent = state.headingMode==='compass' ? "🧭 나침반 끄기" : "🧭 나침반";
 }
-document.getElementById("compassBtn").onclick=()=>{ state.headingOn?disableCompass():enableCompass(); };
+function setMode(mode){ state.headingMode=mode; setHeadingButtons(); updateHeading(); }
+
+compassBtn.onclick=async()=>{
+  if(state.headingMode==='compass'){ setMode('north'); toast("North-up"); return; }
+  const ok = state.headingOn || await enableCompass();
+  if(ok){ setMode('compass'); toast("나침반 ON — 값이 튀면 자동 North-up 폴백"); }
+};
+courseBtn.onclick=()=>{
+  if(state.headingMode==='course'){ setMode('north'); toast("North-up"); return; }
+  setMode('course');
+  toast(state.courseHeading!=null ? "진행방향 정렬 ON" : "진행방향 정렬 ON — 몇 걸음 걸으면 방향이 잡힙니다");
+};
 
 /* ════════════════════════ 시뮬레이션 (GPS 없이 배치 검증) ════════════════════════ */
 // 드래그로 부지 위를 걸어다니는 것처럼 위치 이동. step 2·5 검증용.
@@ -574,32 +621,50 @@ function exitSim(){
 }
 document.getElementById("simBtn").onclick=()=>{ state.sim?exitSim():enterSim(); };
 
-// 드래그 → 위치 이동(시뮬)
-let drag=null;
+// 드래그 제스처:
+//   · 시뮬 ON  → 위치 이동(부지 걸어다니기)
+//   · 시뮬 OFF → 레이더 수동 회전(manual heading) : 나침반 없이 화면을 실제 방향에 맞춤
+let drag=null, rot=null;
 function ptr(e){ const t=e.touches?e.touches[0]:e; return {x:t.clientX,y:t.clientY}; }
 function metersPerDegLat(){ return 111132; }
 function metersPerDegLng(lat){ return 111320*Math.cos(lat*D2R); }
-cv.addEventListener("pointerdown", e=>{ if(!state.sim) return; drag=ptr(e); });
-window.addEventListener("pointermove", e=>{
-  if(!state.sim || !drag || !state.fix) return;
-  const p=ptr(e), dx=p.x-drag.x, dy=p.y-drag.y; drag=p;
-  // 화면 픽셀 → 실거리(내부 선형존 스케일 기준). heading 반영.
-  const mPerPx = SCALE.INNER_M/(SCALE.INNER_FRAC*RR);
-  const east = -dx*mPerPx, north = dy*mPerPx; // 드래그 반대 방향으로 사용자 이동
-  const a = state.heading*D2R; // 화면회전 보정
-  const e2 = east*Math.cos(a) - north*Math.sin(a);
-  const n2 = east*Math.sin(a) + north*Math.cos(a);
-  const lat = state.fix.lat + n2/metersPerDegLat();
-  const lng = state.fix.lng + e2/metersPerDegLng(state.fix.lat);
-  state.fix.lat=lat; state.fix.lng=lng; state.fix.acc=8;
-  state.rawFix={...state.fix};
-  updateStatus(); evalGeofence();
-});
-window.addEventListener("pointerup", ()=>{ drag=null; });
+const ptrAngle=p=>Math.atan2(p.y-CY, p.x-CX)*R2D; // 레이더 중심 기준 각도(도)
 
+cv.addEventListener("pointerdown", e=>{
+  const p=ptr(e);
+  if(state.sim) drag=p;
+  else rot={ prev:ptrAngle(p) };
+});
+window.addEventListener("pointermove", e=>{
+  const p=ptr(e);
+  if(state.sim && drag && state.fix){
+    const dx=p.x-drag.x, dy=p.y-drag.y; drag=p;
+    const mPerPx = SCALE.INNER_M/(SCALE.INNER_FRAC*RR);
+    const east = -dx*mPerPx, north = dy*mPerPx; // 드래그 반대 방향으로 사용자 이동
+    const a = state.heading*D2R;
+    const e2 = east*Math.cos(a) - north*Math.sin(a);
+    const n2 = east*Math.sin(a) + north*Math.cos(a);
+    state.fix.lat += n2/metersPerDegLat();
+    state.fix.lng += e2/metersPerDegLng(state.fix.lat);
+    state.fix.acc=8; state.rawFix={...state.fix};
+    updateStatus(); evalGeofence();
+  } else if(!state.sim && rot){
+    // 손가락 회전각만큼 화면을 돌린다(콘텐츠가 손가락을 따라오도록 heading을 반대로 이동)
+    const cur=ptrAngle(p); let d=cur-rot.prev; rot.prev=cur;
+    if(d>180) d-=360; else if(d<-180) d+=360;
+    state.manualHeading=(state.manualHeading - d + 360)%360;
+    if(state.headingMode!=='manual'){ state.headingMode='manual'; setHeadingButtons(); }
+    updateHeading();
+  }
+});
+window.addEventListener("pointerup", ()=>{ drag=null; rot=null; });
+
+// 정렬 리셋: North-up 복귀 + 수동각 초기화 + 위치 튐 리셋
 document.getElementById("recenterBtn").onclick=()=>{
-  if(state.rawFix){ state.fix={...state.rawFix}; toast("현재 위치로 정렬"); }
+  state.manualHeading=0; setMode('north');
+  if(state.rawFix){ state.fix={...state.rawFix}; }
   else if(state.sim){ applyFix(SITE_CENTER.lat, SITE_CENTER.lng, 8); }
+  toast("North-up 정렬 + 위치 리셋");
 };
 
 /* ════════════════════════ 배경 부지 약도 토글 ════════════════════════ */
