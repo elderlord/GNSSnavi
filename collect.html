@@ -21,6 +21,12 @@
     width:100%; background:#02222b; border:1px solid #12414f; color:var(--fg);
     border-radius:8px; padding:10px; font-size:15px; font-family:ui-monospace,Menlo,monospace;
   }
+  select {
+    width:100%; background:#02222b; border:1px solid #12414f; color:var(--fg);
+    border-radius:8px; padding:11px 10px; font-size:16px; -webkit-appearance:none; appearance:none;
+    background-image:linear-gradient(45deg,transparent 50%,var(--acc) 50%),linear-gradient(135deg,var(--acc) 50%,transparent 50%);
+    background-position:calc(100% - 18px) 18px,calc(100% - 12px) 18px; background-size:6px 6px,6px 6px; background-repeat:no-repeat;
+  }
   button {
     appearance:none; border:0; border-radius:10px; padding:12px 16px; font-size:15px; font-weight:600;
     background:var(--acc); color:#022; cursor:pointer; touch-action:manipulation;
@@ -44,8 +50,9 @@
   <p class="sub">건물 정문 앞에서 30초간 수집 → 중앙값(median) 좌표를 산출합니다.<br>평균이 아닌 중앙값을 쓰는 이유: 멀티패스·이상치에 강함.</p>
 
   <div class="card">
-    <label>수집 대상 (메모용)</label>
-    <input type="text" id="labelIn" placeholder="예: hall-01 자연사관 정문">
+    <label>수집 대상</label>
+    <select id="venueSel"></select>
+    <input type="text" id="labelIn" placeholder="직접 입력 (예: 자연사관 후문)" style="display:none;margin-top:8px">
   </div>
 
   <div class="card">
@@ -81,6 +88,22 @@
   const $ = id => document.getElementById(id);
   let watchId = null, samples = [], startedAt = 0, timer = null;
 
+  // index.html 의 VENUES 와 동일한 7개 관 (id/name 일치 유지)
+  const VENUE_OPTIONS = [
+    { id:"hall-nature",   name:"자연사관" },
+    { id:"hall-tech",     name:"과학기술관" },
+    { id:"hall-future",   name:"미래기술관" },
+    { id:"hall-nari",     name:"창의나래관" },
+    { id:"hall-children", name:"어린이과학관" },
+    { id:"hall-bio",      name:"생물탐구관" },
+    { id:"hall-astro",    name:"천체관" },
+  ];
+  const sel = $("venueSel");
+  VENUE_OPTIONS.forEach(v => { const o = document.createElement("option"); o.value = v.id; o.textContent = v.name; sel.appendChild(o); });
+  { const o = document.createElement("option"); o.value = "__custom__"; o.textContent = "기타(직접 입력)…"; sel.appendChild(o); }
+  sel.onchange = () => { $("labelIn").style.display = sel.value === "__custom__" ? "block" : "none"; render(); };
+  $("labelIn").oninput = render;
+
   const median = arr => {
     if (!arr.length) return NaN;
     const s = [...arr].sort((a, b) => a - b), m = s.length >> 1;
@@ -100,12 +123,22 @@
     const mAcc = median(samples.map(s => s.acc));
     $("medAcc").innerHTML = `<span class="${accClass(mAcc)}">${fmtAcc(mAcc)}</span>`;
     $("medCoord").textContent = `${mLat.toFixed(6)} , ${mLng.toFixed(6)}`;
-    const label = ($("labelIn").value || "unnamed").trim();
-    $("snippet").textContent =
+    const meta = `// 샘플 ${n}개 · 중앙값 정확도 ±${mAcc.toFixed(0)}m · 수집 ${new Date().toISOString()}`;
+    const sv = VENUE_OPTIONS.find(v => v.id === sel.value);
+    if (sv) {
+      // 선택한 관: index.html VENUES 의 해당 항목 lat/lng 만 아래 값으로 교체
+      $("snippet").textContent =
+`// ${sv.name} (${sv.id}) — VENUES 해당 항목의 lat/lng 를 아래로 교체
+  lat: ${mLat.toFixed(6)}, lng: ${mLng.toFixed(6)},
+${meta}`;
+    } else {
+      const label = ($("labelIn").value || "unnamed").trim();
+      $("snippet").textContent =
 `{ id: "TODO-id", name: "${label}",
   lat: ${mLat.toFixed(6)}, lng: ${mLng.toFixed(6)},
   radiusIn: 30, mapImage: "maps/TODO.png" },
-// 샘플 ${n}개 · 중앙값 정확도 ±${mAcc.toFixed(0)}m · 수집 ${new Date().toISOString()}`;
+${meta}`;
+    }
   }
 
   function finish(reason) {
