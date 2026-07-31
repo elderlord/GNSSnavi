@@ -74,9 +74,11 @@
   <div class="card">
     <div id="fixType" class="fixtype">측위 유형: —</div>
     <div class="stat"><span>수집 샘플</span><b id="nSamples">0</b></div>
+    <div class="stat"><span>채택 샘플 (양호분만)</span><b id="nUsed">—</b></div>
     <div class="stat"><span>현재 정확도</span><b id="curAcc">—</b></div>
     <div class="stat"><span>최고 정확도</span><b id="bestAcc">—</b></div>
-    <div class="stat"><span>중앙값 정확도</span><b id="medAcc">—</b></div>
+    <div class="stat"><span>위치 산포</span><b id="scatter">—</b></div>
+    <div class="stat"><span>서로 다른 좌표</span><b id="uniq">—</b></div>
     <div class="stat"><span>고도(위성 신호)</span><b id="altStat">—</b></div>
     <div style="margin-top:10px" class="big" id="medCoord">— , —</div>
   </div>
@@ -122,39 +124,71 @@
   const accClass = a => a == null ? "" : a <= 10 ? "acc-good" : a <= 25 ? "acc-mid" : "acc-bad";
   const fmtAcc = a => a == null ? "—" : `±${a.toFixed(0)} m`;
 
+  // 두 지점 거리(m) — 산포 진단용
+  const distM = (a, b) => {
+    const R = 6371000, D2R = Math.PI / 180;
+    const dla = (b.lat - a.lat) * D2R, dlo = (b.lng - a.lng) * D2R;
+    const h = Math.sin(dla / 2) ** 2 + Math.cos(a.lat * D2R) * Math.cos(b.lat * D2R) * Math.sin(dlo / 2) ** 2;
+    return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+  };
+
   function render() {
     const n = samples.length;
     $("nSamples").textContent = n;
     if (!n) return;
     const last = samples[n - 1];
     $("curAcc").innerHTML = `<span class="${accClass(last.acc)}">${fmtAcc(last.acc)}</span>`;
-    const mLat = median(samples.map(s => s.lat));
-    const mLng = median(samples.map(s => s.lng));
-    const mAcc = median(samples.map(s => s.acc));
     const bestAcc = Math.min(...samples.map(s => s.acc));
     $("bestAcc").innerHTML = `<span class="${accClass(bestAcc)}">${fmtAcc(bestAcc)}</span>`;
-    $("medAcc").innerHTML = `<span class="${accClass(mAcc)}">${fmtAcc(mAcc)}</span>`;
+
+    // ── 양호 샘플만 채택 ──
+    // GPS는 시간이 지나며 좋아진다. 워밍업 구간의 거친 값(WiFi 캐시)이 중앙값을 오염시키므로
+    // '최고 정확도의 1.5배 이내' 샘플만 사용한다. (표본이 너무 적으면 전체 사용)
+    const thr = Math.max(bestAcc * 1.5, bestAcc + 3);
+    let used = samples.filter(s => s.acc <= thr);
+    if (used.length < 5) used = samples;
+    $("nUsed").textContent = `${used.length} / ${n}`;
+
+    const mLat = median(used.map(s => s.lat));
+    const mLng = median(used.map(s => s.lng));
+    const mAcc = median(used.map(s => s.acc));
     $("medCoord").textContent = `${mLat.toFixed(6)} , ${mLng.toFixed(6)}`;
 
-    // ── 측위 유형 진단 ──
-    // 위성(GNSS)은 고도(altitude)를 제공하고 정확도가 개선된다. WiFi/셀 측위는 고도가 없고
-    // 정확도가 특정 값(예: ±20~65m)에 고정되는 경향. → 고도 유무 + 최고 정확도로 판별.
+    // ── 산포(scatter): 중앙값에서 각 샘플까지 거리의 중앙값 ──
+    // 진짜 위성 측위는 샘플이 수 m씩 흔들린다. WiFi/셀 측위는 AP DB의 같은 좌표를
+    // 반복 반환하므로 산포가 0에 가깝다 → 정확도 표시와 무관하게 결정적 단서.
+    const mid = { lat: mLat, lng: mLng };
+    const scat = median(used.map(s => distM(mid, s)));
+    const uniq = new Set(samples.map(s => `${s.lat.toFixed(6)},${s.lng.toFixed(6)}`)).size;
+    $("scatter").textContent = `${scat.toFixed(1)} m`;
+    $("uniq").innerHTML = `${uniq}개 ${uniq <= 2 && n >= 8 ? '<span class="acc-bad">(고정 — WiFi 의심)</span>' : ''}`;
+
     const altVals = samples.map(s => s.alt).filter(a => a != null && !isNaN(a));
     const hasAlt = altVals.length > 0;
-    const accSpread = Math.max(...samples.map(s => s.acc)) - bestAcc;
     $("altStat").textContent = hasAlt ? `${median(altVals).toFixed(0)} m (위성 ✓)` : "없음 (WiFi 의심)";
-    const ft = $("fixType");
-    if (!hasAlt || bestAcc > 30) {
-      ft.className = "fixtype wifi";
-      ft.innerHTML = "⚠ WiFi/셀 측위 의심 — 좌표 부정확<br><span style='font-weight:400;font-size:12px'>WiFi를 끄고, 하늘 트인 곳에서 재측정하세요</span>";
-    } else if (bestAcc > 15) {
-      ft.className = "fixtype weak";
-      ft.textContent = "△ 위성 측위지만 정확도 낮음 — 좀 더 트인 곳 권장";
+
+    // ── 종합 진단 ──
+    // 판정 근거의 신뢰 순서: ① 좌표 고정(frozen) ② 정확도 ③ 고도(보조).
+    // 고도는 GPS가 정상이어도 기기에 따라 null 인 경우가 있어 단독 근거로 쓰지 않는다.
+    const frozen = n >= 8 && uniq <= 2;   // 같은 좌표만 반복 = AP DB 고정 위치
+    const ft = $("fixType"); let cls, msg;
+    if (frozen) {
+      cls = "wifi"; msg = "⚠ WiFi/셀 측위 — 좌표가 갱신되지 않습니다(같은 값 반복)"
+        + "<br><span style='font-weight:400;font-size:12px'>WiFi를 끄고 하늘 트인 곳에서 재측정하세요</span>";
+    } else if (bestAcc > 30) {
+      cls = "wifi"; msg = "⚠ 정확도 매우 낮음 — WiFi/셀 측위 의심"
+        + "<br><span style='font-weight:400;font-size:12px'>WiFi를 끄고 하늘 트인 곳에서 재측정하세요</span>";
+    } else if (bestAcc <= 15) {
+      // 정확도가 충분하고 좌표가 흔들리면 위성 측위로 본다(고도 없어도 양호 판정)
+      cls = "gnss"; msg = "✓ 위성(GNSS) 측위 — 양호" + (hasAlt ? " · 고도 확인됨" : "");
     } else {
-      ft.className = "fixtype gnss";
-      ft.textContent = "✓ 위성(GNSS) 측위 — 양호";
+      cls = "weak"; msg = "△ 정확도 보통(±15~30m) — 좀 더 트인 곳에서 재측정 권장";
     }
-    const meta = `// 샘플 ${n}개 · 중앙값 정확도 ±${mAcc.toFixed(0)}m · 수집 ${new Date().toISOString()}`;
+    ft.className = "fixtype " + cls; ft.innerHTML = msg;
+    // 스니펫에 품질 근거를 함께 남긴다(나중에 값 신뢰도 판단용)
+    const quality = frozen ? "WiFi의심(좌표고정)" : bestAcc > 30 ? "WiFi의심(정확도낮음)" : bestAcc <= 15 ? "위성(양호)" : "보통";
+    const meta = `// ${quality} · 채택 ${used.length}/${n} · 최고 ±${bestAcc.toFixed(0)}m · 중앙 ±${mAcc.toFixed(0)}m`
+      + ` · 산포 ${scat.toFixed(1)}m · ${new Date().toISOString()}`;
     const sv = VENUE_OPTIONS.find(v => v.id === sel.value);
     if (sv) {
       // 선택한 관: index.html VENUES 의 해당 항목 lat/lng 만 아래 값으로 교체
@@ -207,7 +241,8 @@ ${meta}`;
   $("resetBtn").onclick = () => {
     samples = []; $("progBar").style.width = "0";
     $("nSamples").textContent = "0";
-    $("curAcc").textContent = $("bestAcc").textContent = $("medAcc").textContent = $("altStat").textContent = "—";
+    $("curAcc").textContent = $("bestAcc").textContent = $("altStat").textContent = "—";
+    $("nUsed").textContent = $("scatter").textContent = $("uniq").textContent = "—";
     $("fixType").className = "fixtype"; $("fixType").textContent = "측위 유형: —";
     $("medCoord").textContent = "— , —"; $("snippet").textContent = "아직 수집 전입니다.";
     $("copyBtn").disabled = $("resetBtn").disabled = true;
