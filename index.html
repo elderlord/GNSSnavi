@@ -146,9 +146,24 @@ const VENUES = [
     mapImage:"maps/hall-astro.png" },
 ];
 
-// 부지 도식(SVG) 좌표계 — 위경도 → viewBox(1000×700) 선형 매핑용 경계.
-// 배경 도식 요소(광장·통로·하천)와 마커 배치가 같은 공간을 공유하도록 한 곳에서 정의.
-const SITE_BOUNDS = { lngMin:127.37050, lngMax:127.37750, latMin:36.37450, latMax:36.37850, VW:1000, VH:700 };
+// 부지 도식(SVG) 좌표계 — 위경도 → viewBox 선형 매핑용 경계.
+// ★ 손으로 추정하지 않고 VENUES 실측 좌표에서 자동 산출한다.
+//   (공식 안내도는 조감도라 북쪽이 위가 아니며, 이를 눈대중으로 옮기면 배치가 뒤틀린다.
+//    좌표가 갱신되면 배경 도식도 자동으로 따라간다.)
+const SITE_BOUNDS = (() => {
+  const VW = 1000;
+  const lats = VENUES.map(v => v.lat), lngs = VENUES.map(v => v.lng);
+  let latMin = Math.min(...lats), latMax = Math.max(...lats);
+  let lngMin = Math.min(...lngs), lngMax = Math.max(...lngs);
+  const dLat = (latMax - latMin) || 0.0015, dLng = (lngMax - lngMin) || 0.0015;
+  latMin -= dLat * 0.25; latMax += dLat * 0.25;   // 가장자리 관이 잘리지 않도록 여백
+  lngMin -= dLng * 0.25; lngMax += dLng * 0.25;
+  // 실제 미터 비율로 세로 크기를 정해 남북/동서 왜곡을 막는다
+  const midLat = (latMin + latMax) / 2;
+  const mLat = (latMax - latMin) * 111132;
+  const mLng = (lngMax - lngMin) * 111320 * Math.cos(midLat * Math.PI / 180);
+  return { lngMin, lngMax, latMin, latMax, VW, VH: Math.round(VW * (mLat / mLng)) };
+})();
 
 /* 지오펜스 히스테리시스 파라미터 (§4.2) */
 const GEO = { OUT_MARGIN: 15 /* R_out = radiusIn + 15m */, DWELL_MS: 3000 /* T=3초 */ };
@@ -467,11 +482,10 @@ document.getElementById("indoorClose").onclick=()=>{ // 수동으로 레이더 �
    실내 진입 시 highlightId 관을 강조해 전체화면 약도로 표시.
    관별 상세 약도(maps/*.png)가 준비되면 VENUES[].mapImage 로 자동 대체됨.
    ──────────────────────────────────────────────────────────── */
-// 도식 분위기용 비강조 시설 (안내도 참조 · 실측 아님). 위경도 더미로만 배치.
-const SITE_DECOR = [
-  { name:"사이언스홀", lat:36.377150, lng:127.372000, w:100, h:66 },
-  { name:"우주과학공원", lat:36.377680, lng:127.374350, w:90, h:55 },
-];
+// 비강조 시설(사이언스홀·우주과학공원 등)은 실측 좌표가 없어 비워둔다.
+// 추정 좌표로 그리면 실제 배치와 어긋나 오히려 오해를 부르므로, 실측되면 추가할 것.
+// 형식: { name, lat, lng, w, h, dome? }
+const SITE_DECOR = [];
 function svgEsc(s){ return String(s).replace(/[<>&]/g, c=>({"<":"&lt;",">":"&gt;","&":"&amp;"}[c])); }
 
 // bg=true 이면 레이더 배경용(투명 바탕, 핀 없음, 옅은 톤). false 이면 실내 진입 약도용.
@@ -479,10 +493,18 @@ function buildSiteMapSVG(highlightId, bg=false){
   const b=SITE_BOUNDS;
   const blocks=[];
 
-  // 남측 하천(갑천) 밴드 + 중앙 광장
-  blocks.push(`<path d="M0,${b.VH} L0,${b.VH-70} L${b.VW},${b.VH-160} L${b.VW},${b.VH} Z" fill="#07211a" opacity="${bg?.5:.7}"/>`);
-  blocks.push(`<circle cx="${b.VW*0.42}" cy="${b.VH*0.47}" r="44" fill="none" stroke="#124e38" stroke-dasharray="4 5"/>`);
-  if(!bg) blocks.push(`<text x="${b.VW*0.42}" y="${b.VH*0.47+4}" fill="#2c6b52" font-size="15" text-anchor="middle">과학광장</text>`);
+  // 하천·광장 등 지형지물은 실측 기준점이 없어 그리지 않는다(추정 배치는 오해를 부름).
+  // 대신 100m 격자를 깔아 거리 감각을 준다.
+  {
+    const midLat=(b.latMin+b.latMax)/2;
+    const pxPer100mX = 100/((b.lngMax-b.lngMin)*111320*Math.cos(midLat*Math.PI/180))*b.VW;
+    const pxPer100mY = 100/((b.latMax-b.latMin)*111132)*b.VH;
+    for(let x=pxPer100mX; x<b.VW; x+=pxPer100mX)
+      blocks.push(`<line x1="${x}" y1="0" x2="${x}" y2="${b.VH}" stroke="#0f3d2c" stroke-width="1"/>`);
+    for(let y=pxPer100mY; y<b.VH; y+=pxPer100mY)
+      blocks.push(`<line x1="0" y1="${y}" x2="${b.VW}" y2="${y}" stroke="#0f3d2c" stroke-width="1"/>`);
+    if(!bg) blocks.push(`<text x="8" y="${b.VH-8}" fill="#2c6b52" font-size="14">격자 100m</text>`);
+  }
 
   // 비강조 시설(컨텍스트)
   for(const d of SITE_DECOR){
