@@ -43,11 +43,18 @@
   .bar { height:6px; border-radius:3px; background:#0a2a33; overflow:hidden; margin-top:8px; }
   .bar > i { display:block; height:100%; background:var(--acc); width:0; transition:width .3s; }
   .note { font-size:12px; color:var(--dim); margin-top:8px; }
+  .fixtype { font-size:13px; font-weight:700; padding:8px 10px; border-radius:8px; margin-bottom:10px; text-align:center;
+    background:#0a2a33; color:var(--dim); border:1px solid #12414f; }
+  .fixtype.gnss { color:var(--acc); border-color:var(--acc); }
+  .fixtype.wifi { color:var(--err); border-color:var(--err); }
+  .fixtype.weak { color:var(--warn); border-color:var(--warn); }
 </style>
 </head>
 <body>
   <h1>좌표 수집 도구</h1>
-  <p class="sub">건물 정문 앞에서 30초간 수집 → 중앙값(median) 좌표를 산출합니다.<br>평균이 아닌 중앙값을 쓰는 이유: 멀티패스·이상치에 강함.</p>
+  <p class="sub">건물 정문 앞에서 30초간 수집 → 중앙값(median) 좌표를 산출합니다.<br>
+    <b style="color:var(--warn)">정확도가 계속 ±20m대로 고정되면 WiFi 측위입니다 → 폰의 WiFi를 끄고</b> 하늘 트인 곳에서 재측정하세요.<br>
+    아래 <b>측위 유형</b> 표시가 초록(위성 GNSS)일 때 값이 신뢰할 만합니다.</p>
 
   <div class="card">
     <label>수집 대상</label>
@@ -65,9 +72,12 @@
   </div>
 
   <div class="card">
+    <div id="fixType" class="fixtype">측위 유형: —</div>
     <div class="stat"><span>수집 샘플</span><b id="nSamples">0</b></div>
     <div class="stat"><span>현재 정확도</span><b id="curAcc">—</b></div>
+    <div class="stat"><span>최고 정확도</span><b id="bestAcc">—</b></div>
     <div class="stat"><span>중앙값 정확도</span><b id="medAcc">—</b></div>
+    <div class="stat"><span>고도(위성 신호)</span><b id="altStat">—</b></div>
     <div style="margin-top:10px" class="big" id="medCoord">— , —</div>
   </div>
 
@@ -121,8 +131,29 @@
     const mLat = median(samples.map(s => s.lat));
     const mLng = median(samples.map(s => s.lng));
     const mAcc = median(samples.map(s => s.acc));
+    const bestAcc = Math.min(...samples.map(s => s.acc));
+    $("bestAcc").innerHTML = `<span class="${accClass(bestAcc)}">${fmtAcc(bestAcc)}</span>`;
     $("medAcc").innerHTML = `<span class="${accClass(mAcc)}">${fmtAcc(mAcc)}</span>`;
     $("medCoord").textContent = `${mLat.toFixed(6)} , ${mLng.toFixed(6)}`;
+
+    // ── 측위 유형 진단 ──
+    // 위성(GNSS)은 고도(altitude)를 제공하고 정확도가 개선된다. WiFi/셀 측위는 고도가 없고
+    // 정확도가 특정 값(예: ±20~65m)에 고정되는 경향. → 고도 유무 + 최고 정확도로 판별.
+    const altVals = samples.map(s => s.alt).filter(a => a != null && !isNaN(a));
+    const hasAlt = altVals.length > 0;
+    const accSpread = Math.max(...samples.map(s => s.acc)) - bestAcc;
+    $("altStat").textContent = hasAlt ? `${median(altVals).toFixed(0)} m (위성 ✓)` : "없음 (WiFi 의심)";
+    const ft = $("fixType");
+    if (!hasAlt || bestAcc > 30) {
+      ft.className = "fixtype wifi";
+      ft.innerHTML = "⚠ WiFi/셀 측위 의심 — 좌표 부정확<br><span style='font-weight:400;font-size:12px'>WiFi를 끄고, 하늘 트인 곳에서 재측정하세요</span>";
+    } else if (bestAcc > 15) {
+      ft.className = "fixtype weak";
+      ft.textContent = "△ 위성 측위지만 정확도 낮음 — 좀 더 트인 곳 권장";
+    } else {
+      ft.className = "fixtype gnss";
+      ft.textContent = "✓ 위성(GNSS) 측위 — 양호";
+    }
     const meta = `// 샘플 ${n}개 · 중앙값 정확도 ±${mAcc.toFixed(0)}m · 수집 ${new Date().toISOString()}`;
     const sv = VENUE_OPTIONS.find(v => v.id === sel.value);
     if (sv) {
@@ -159,7 +190,7 @@ ${meta}`;
     $("phase").textContent = "수집 중… 움직이지 말고 대기하세요.";
     watchId = navigator.geolocation.watchPosition(
       pos => {
-        samples.push({ lat: pos.coords.latitude, lng: pos.coords.longitude, acc: pos.coords.accuracy });
+        samples.push({ lat: pos.coords.latitude, lng: pos.coords.longitude, acc: pos.coords.accuracy, alt: pos.coords.altitude });
         render();
       },
       err => finish("오류: " + err.message + " (위치 권한을 허용했는지 확인)"),
@@ -175,7 +206,9 @@ ${meta}`;
   $("stopBtn").onclick = () => finish(`중지됨 — 샘플 ${samples.length}개.`);
   $("resetBtn").onclick = () => {
     samples = []; $("progBar").style.width = "0";
-    $("nSamples").textContent = "0"; $("curAcc").textContent = $("medAcc").textContent = "—";
+    $("nSamples").textContent = "0";
+    $("curAcc").textContent = $("bestAcc").textContent = $("medAcc").textContent = $("altStat").textContent = "—";
+    $("fixType").className = "fixtype"; $("fixType").textContent = "측위 유형: —";
     $("medCoord").textContent = "— , —"; $("snippet").textContent = "아직 수집 전입니다.";
     $("copyBtn").disabled = $("resetBtn").disabled = true;
     $("phase").textContent = "초기화됨.";
