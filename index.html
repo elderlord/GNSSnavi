@@ -127,18 +127,20 @@ const SITE_CENTER = { lat: 36.376600, lng: 127.374500 }; // ★ 부지 중심 (�
 // 실내 진입 시 약도 표시 우선순위:  floors[] (층별)  >  mapImage (단일)  >  자체 부지 도식 하이라이트
 //   floors: [{ label:"1F", img:"maps/xxx-1f.png" }, ...]  ← 층 구분(수동 탭). 실내는 측위가 없어 자동 층감지 불가.
 const VENUES = [
-  { id:"hall-nature",   name:"자연사관",     lat:36.376960, lng:127.373160, radiusIn:30, mapImage:null }, // S1 중앙 서
-  { id:"hall-tech",     name:"과학기술관",   lat:36.376690, lng:127.374720, radiusIn:30, mapImage:null }, // N1 중앙
-  { id:"hall-future",   name:"미래기술관",   lat:36.377230, lng:127.374050, radiusIn:28, mapImage:null }, // 중앙 북
-  { id:"hall-nari",     name:"창의나래관",   lat:36.375790, lng:127.372710, radiusIn:28, mapImage:null }, // S3 남서
-  { id:"hall-children", name:"어린이과학관", lat:36.376420, lng:127.371820, radiusIn:28, mapImage:null }, // S4 서
-  { id:"hall-bio",      name:"생물탐구관",   lat:36.375340, lng:127.376510, radiusIn:26, mapImage:null }, // N8 남동(돔)
-  // N3 천체관 — 벽면 대형 달 인쇄. 층 구분 예시로 floors 배선(이미지 준비 전엔 '준비 중' 표시).
-  { id:"hall-astro",    name:"천체관",       lat:36.376560, lng:127.375650, radiusIn:26,
-    floors:[
-      { label:"1F 천체투영관", img:"maps/hall-astro-1f.png" },
-      { label:"2F 전시·관측",  img:"maps/hall-astro-2f.png" },
-    ] },
+  { id:"hall-nature",   name:"자연사관",     lat:36.376960, lng:127.373160, radiusIn:30, // S1 중앙 서
+    floors:[ {label:"1층",img:"maps/hall-nature-1f.png"}, {label:"2층",img:"maps/hall-nature-2f.png"} ] },
+  { id:"hall-tech",     name:"과학기술관",   lat:36.376690, lng:127.374720, radiusIn:30, // N1 중앙
+    floors:[ {label:"지하1층",img:"maps/hall-tech-b1f.png"}, {label:"1층",main:true,img:"maps/hall-tech-1f.png"},
+             {label:"중층",img:"maps/hall-tech-1mf.png"}, {label:"2층",img:"maps/hall-tech-2f.png"} ] },
+  { id:"hall-future",   name:"미래기술관",   lat:36.377230, lng:127.374050, radiusIn:28, // 중앙 북
+    floors:[ {label:"1층",img:"maps/hall-future-1f.png"}, {label:"2층",img:"maps/hall-future-2f.png"} ] },
+  { id:"hall-nari",     name:"창의나래관",   lat:36.375790, lng:127.372710, radiusIn:28, // S3 남서
+    floors:[ {label:"1층",img:"maps/hall-nari-1f.png"}, {label:"2층",img:"maps/hall-nari-2f.png"}, {label:"3층",img:"maps/hall-nari-3f.png"} ] },
+  { id:"hall-children", name:"어린이과학관", lat:36.376420, lng:127.371820, radiusIn:28, // S4 서
+    floors:[ {label:"1층",img:"maps/hall-children-1f.png"}, {label:"2층",img:"maps/hall-children-2f.png"} ] },
+  { id:"hall-bio",      name:"생물탐구관",   lat:36.375340, lng:127.376510, radiusIn:26, mapImage:null }, // N8 남동(돔) — 약도 준비 중, 자체 도식
+  { id:"hall-astro",    name:"천체관",       lat:36.376560, lng:127.375650, radiusIn:26, // N3 — 벽면 대형 달. 단일 층(3D천체투영관)
+    mapImage:"maps/hall-astro.png" },
 ];
 
 // 부지 도식(SVG) 좌표계 — 위경도 → viewBox(1000×700) 선형 매핑용 경계.
@@ -378,7 +380,9 @@ function enterIndoor(v){
       tabs.appendChild(b);
     });
   }
-  showFloor(v, floors, 0);
+  // 기본 표시 층: main:true 지정층(보통 입구층), 없으면 첫 층
+  const start = Math.max(0, floors.findIndex(f=>f.main));
+  showFloor(v, floors, start);
   document.getElementById("indoor").classList.add("show");
 }
 function showFloor(v, floors, idx){
