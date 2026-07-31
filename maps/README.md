@@ -33,7 +33,7 @@
 | 창의나래관 | `hall-nari-1f.png`, `hall-nari-2f.png`, `hall-nari-3f.png` |
 | 어린이과학관 | `hall-children-1f.png`, `hall-children-2f.png` |
 | 천체관 | `hall-astro.png` (단일) |
-| 생물탐구관 | (없음 → 자체 도식) |
+| 생물탐구관 | `hall-bio-1f.png` (단일) |
 
 새 이미지를 추가/교체할 때는 위 파일명 규칙(`hall-<id>-<층>.png`)만 맞추면
 코드 수정 없이 자동 연결됩니다. `main` 루트에 남아있는 한글 원본 파일은 중복이므로

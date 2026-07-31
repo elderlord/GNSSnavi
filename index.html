@@ -38,7 +38,7 @@
   button.on{background:var(--acc);color:#022;border-color:var(--acc);}
   button:active{transform:translateY(1px);}
 
-  #legend{position:absolute;left:8px;bottom:70px;font-size:11px;color:var(--dim);pointer-events:none;}
+  #legend{position:absolute;left:8px;bottom:70px;font-size:11px;color:var(--dim);pointer-events:auto;cursor:pointer;}
   #legend b{color:var(--grid);}
 
   /* ── indoor overlay ── */
@@ -85,6 +85,7 @@
 
     <div id="controls" class="panel">
       <button id="compassBtn">🧭 나침반 켜기</button>
+      <button id="bgBtn">🗺 배경약도</button>
       <button id="simBtn">▶︎ 시뮬레이션</button>
       <button id="recenterBtn">◎ 중심 정렬</button>
     </div>
@@ -138,7 +139,8 @@ const VENUES = [
     floors:[ {label:"1층",img:"maps/hall-nari-1f.png"}, {label:"2층",img:"maps/hall-nari-2f.png"}, {label:"3층",img:"maps/hall-nari-3f.png"} ] },
   { id:"hall-children", name:"어린이과학관", lat:36.376420, lng:127.371820, radiusIn:28, // S4 서
     floors:[ {label:"1층",img:"maps/hall-children-1f.png"}, {label:"2층",img:"maps/hall-children-2f.png"} ] },
-  { id:"hall-bio",      name:"생물탐구관",   lat:36.375340, lng:127.376510, radiusIn:26, mapImage:null }, // N8 남동(돔) — 약도 준비 중, 자체 도식
+  { id:"hall-bio",      name:"생물탐구관",   lat:36.375340, lng:127.376510, radiusIn:26, // N8 남동(돔)
+    mapImage:"maps/hall-bio-1f.png" },
   { id:"hall-astro",    name:"천체관",       lat:36.376560, lng:127.375650, radiusIn:26, // N3 — 벽면 대형 달. 단일 층(3D천체투영관)
     mapImage:"maps/hall-astro.png" },
 ];
@@ -153,13 +155,10 @@ const GEO = { OUT_MARGIN: 15 /* R_out = radiusIn + 15m */, DWELL_MS: 3000 /* T=3
 /* 레이더 스케일 2단 고정 (§4.1) */
 const SCALE = { INNER_M: 150, OUTER_M: 600, INNER_FRAC: 0.60 }; // 0~150m→0~60%, 150~600m→60~100%
 
-/* 배경 약도(선택). 두 대각 기준점의 실좌표+이미지 픽셀좌표를 넣으면 내부 선형존에 정렬 렌더.
-   실좌표 미확보 시 null 로 두면 배경 없이 레이더만 그림. (§7) */
+/* 배경 약도: 현재는 위경도 기반 자체 SVG 도식(SITE_BOUNDS)을 레이더에 정렬해 렌더한다(drawSiteMap).
+   실제 부지 항공 약도 이미지를 배경으로 쓰려면, 두 대각 기준점의 실좌표+이미지 픽셀좌표를
+   확보해 아래 SITE_MAP 방식으로 확장하면 된다(§7). 현재는 미사용(null). */
 const SITE_MAP = null;
-/* 예시:
-const SITE_MAP = { src:"maps/site.png",
-  ref:[ {lat:36.3790,lng:127.3720,px:0.05,py:0.05}, {lat:36.3742,lng:127.3775,px:0.95,py:0.95} ] };
-*/
 
 /* ════════════════════════ 지오 유틸 ════════════════════════ */
 const R_EARTH = 6371000, D2R = Math.PI/180, R2D = 180/Math.PI;
@@ -196,6 +195,7 @@ const state = {
   headingOn:false,    // 나침반 사용 여부
   headingValid:false, // 최근 값 유효?
   sim:false,          // 시뮬레이션 모드
+  bgOn:false,         // 배경 부지 약도 표시
   indoor:null,        // 현재 실내로 판정된 venue
   t0:performance.now()
 };
@@ -312,16 +312,33 @@ function draw(now){
   requestAnimationFrame(draw);
 }
 
-function drawSiteMap(){
-  if(!SITE_MAP || !siteMapImg || !siteMapImg.complete || !state.fix) return;
-  // 두 기준점으로 (lat,lng)→화면(px) 선형 변환 계수 산출, 내부 선형존만 정렬.
-  // 간단화: 내부 150m=INNER_FRAC*RR 스케일과 정렬되도록 사용자 기준 배치.
-  // (외곽 압축존은 이미지와 어긋나므로 페이드아웃)
-  // 여기서는 배경을 사용자 위치 중심, north-up 기준으로만 배치(회전 미적용) — v1 한계.
-  // 구현은 SITE_MAP 실좌표 확보 후 확장.
+// 배경 부지 도식(위경도 기반 SVG)을 레이더 좌표계에 정렬해 반투명으로 렌더.
+// 마커와 동일한 회전/스케일 규약을 쓰므로 마커·건물 블록이 정확히 겹친다.
+// 주의: 레이더 반경은 2단(비선형)이지만 배경은 내부 150m 선형존 스케일로만 투영한다.
+//       → 부지 중심 근처(≈150m 이내)에서 정렬이 정확하고, 외곽은 압축존과 어긋난다(의도된 한계).
+let siteBgImg=null, siteBgReady=false;
+function initSiteBg(){
+  siteBgImg=new Image();
+  siteBgImg.onload=()=>{ siteBgReady=true; };
+  siteBgImg.src="data:image/svg+xml;charset=utf-8,"+encodeURIComponent(buildSiteMapSVG(null, true));
 }
-let siteMapImg=null;
-if(SITE_MAP){ siteMapImg=new Image(); siteMapImg.src=SITE_MAP.src; }
+function drawSiteMap(){
+  if(!state.bgOn || !siteBgReady || !state.fix) return;
+  const b=SITE_BOUNDS;
+  const su=latlngToSite(state.fix.lat, state.fix.lng);        // 사용자 위치의 도식 px
+  const mx=(b.lngMax-b.lngMin)*metersPerDegLng(state.fix.lat)/b.VW; // m/도식x-px
+  const my=(b.latMax-b.latMin)*metersPerDegLat()/b.VH;             // m/도식y-px
+  const s=SCALE.INNER_FRAC*RR/SCALE.INNER_M;                        // px/m (선형존)
+  const hd=state.heading*D2R, cos=Math.cos(hd), sin=Math.sin(hd);
+  const a=s*mx*cos, c=s*my*sin, bb=-s*mx*sin, d=s*my*cos;          // 도식px→화면 affine
+  const e=CX - a*su.x - c*su.y, f=CY - bb*su.x - d*su.y;
+  ctx.save();
+  ctx.beginPath(); ctx.arc(CX,CY,RR,0,7); ctx.clip();              // 레이더 원판 안으로만
+  ctx.globalAlpha=0.55;
+  ctx.setTransform(a*DPR, bb*DPR, c*DPR, d*DPR, e*DPR, f*DPR);
+  ctx.drawImage(siteBgImg, 0, 0);
+  ctx.restore();
+}
 
 /* ════════════════════════ 위치 스무딩 ════════════════════════ */
 function applyFix(lat,lng,acc){
@@ -418,47 +435,48 @@ const SITE_DECOR = [
 ];
 function svgEsc(s){ return String(s).replace(/[<>&]/g, c=>({"<":"&lt;",">":"&gt;","&":"&amp;"}[c])); }
 
-function buildSiteMapSVG(highlightId){
+// bg=true 이면 레이더 배경용(투명 바탕, 핀 없음, 옅은 톤). false 이면 실내 진입 약도용.
+function buildSiteMapSVG(highlightId, bg=false){
   const b=SITE_BOUNDS;
   const blocks=[];
 
-  // 배경: 남측 하천(갑천) 밴드 + 중앙 광장
-  blocks.push(`<path d="M0,${b.VH} L0,${b.VH-70} L${b.VW},${b.VH-160} L${b.VW},${b.VH} Z" fill="#07211a" opacity=".7"/>`);
+  // 남측 하천(갑천) 밴드 + 중앙 광장
+  blocks.push(`<path d="M0,${b.VH} L0,${b.VH-70} L${b.VW},${b.VH-160} L${b.VW},${b.VH} Z" fill="#07211a" opacity="${bg?.5:.7}"/>`);
   blocks.push(`<circle cx="${b.VW*0.42}" cy="${b.VH*0.47}" r="44" fill="none" stroke="#124e38" stroke-dasharray="4 5"/>`);
-  blocks.push(`<text x="${b.VW*0.42}" y="${b.VH*0.47+4}" fill="#2c6b52" font-size="15" text-anchor="middle">과학광장</text>`);
+  if(!bg) blocks.push(`<text x="${b.VW*0.42}" y="${b.VH*0.47+4}" fill="#2c6b52" font-size="15" text-anchor="middle">과학광장</text>`);
 
   // 비강조 시설(컨텍스트)
   for(const d of SITE_DECOR){
     const p=latlngToSite(d.lat,d.lng), w=d.w||90, h=d.h||60;
     if(d.dome) blocks.push(`<ellipse cx="${p.x}" cy="${p.y}" rx="${w/2}" ry="${h/2}" fill="#0c2c22" stroke="#1c5a41"/>`);
     else blocks.push(`<rect x="${p.x-w/2}" y="${p.y-h/2}" width="${w}" height="${h}" rx="8" fill="#0c2c22" stroke="#1c5a41"/>`);
-    blocks.push(`<text x="${p.x}" y="${p.y+5}" fill="#3f8a6f" font-size="15" text-anchor="middle">${svgEsc(d.name)}</text>`);
+    blocks.push(`<text x="${p.x}" y="${p.y+5}" fill="${bg?'#2c6b52':'#3f8a6f'}" font-size="15" text-anchor="middle">${svgEsc(d.name)}</text>`);
   }
 
-  // 전시관(강조 대상 6개)
+  // 전시관(7개)
   for(const v of VENUES){
     const p=latlngToSite(v.lat,v.lng), hot=v.id===highlightId;
     const dome=v.id==="hall-bio", w=110, h=72;
-    const fill=hot?"#0f5c3f":"#123a2b", stroke=hot?"#2effa6":"#1f6b4c", sw=hot?3:1.4;
+    const fill=hot?"#0f5c3f":(bg?"#0d3527":"#123a2b"), stroke=hot?"#2effa6":(bg?"#1f7a54":"#1f6b4c"), sw=hot?3:1.4;
     const glow=hot?` filter="url(#g)"`:``;
     if(dome) blocks.push(`<ellipse cx="${p.x}" cy="${p.y}" rx="${w/2}" ry="${h/2}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"${glow}/>`);
     else blocks.push(`<rect x="${p.x-w/2}" y="${p.y-h/2}" width="${w}" height="${h}" rx="10" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"${glow}/>`);
-    blocks.push(`<text x="${p.x}" y="${p.y+6}" fill="${hot?'#eaffff':'#8fd9bb'}" font-size="${hot?19:16}" font-weight="${hot?700:600}" text-anchor="middle">${svgEsc(v.name)}</text>`);
-    if(hot){ // 현재 위치 핀
+    blocks.push(`<text x="${p.x}" y="${p.y+6}" fill="${hot?'#eaffff':(bg?'#6fbf9b':'#8fd9bb')}" font-size="${hot?19:16}" font-weight="${hot?700:600}" text-anchor="middle">${svgEsc(v.name)}</text>`);
+    if(hot && !bg){ // 현재 위치 핀 (실내 약도에서만)
       blocks.push(`<circle cx="${p.x}" cy="${p.y-h/2-16}" r="9" fill="#2effa6"${glow}/>`);
       blocks.push(`<path d="M${p.x-7},${p.y-h/2-12} L${p.x+7},${p.y-h/2-12} L${p.x},${p.y-h/2} Z" fill="#2effa6"/>`);
       blocks.push(`<text x="${p.x}" y="${p.y-h/2-30}" fill="#2effa6" font-size="15" font-weight="700" text-anchor="middle">현재 위치</text>`);
     }
   }
 
+  const arrow = bg ? `` : `<g transform="translate(${b.VW-60},46)"><line x1="0" y1="26" x2="0" y2="-6" stroke="#ff5d6c" stroke-width="2"/>
+      <path d="M-5,2 L5,2 L0,-8 Z" fill="#ff5d6c"/><text x="0" y="42" fill="#ff5d6c" font-size="14" text-anchor="middle" font-family="sans-serif">N</text></g>`;
   return `<svg viewBox="0 0 ${b.VW} ${b.VH}" xmlns="http://www.w3.org/2000/svg"
-    style="width:100%;height:auto;max-height:100%;background:#04140e;border-radius:10px" role="img" aria-label="부지 약도">
+    style="width:100%;height:auto;max-height:100%;${bg?'':'background:#04140e;'}border-radius:10px" role="img" aria-label="부지 약도">
     <defs><filter id="g" x="-40%" y="-40%" width="180%" height="180%">
       <feGaussianBlur stdDeviation="6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
     </filter></defs>
-    <g font-family="-apple-system,sans-serif">${blocks.join("")}</g>
-    <g transform="translate(${b.VW-60},46)"><line x1="0" y1="26" x2="0" y2="-6" stroke="#ff5d6c" stroke-width="2"/>
-      <path d="M-5,2 L5,2 L0,-8 Z" fill="#ff5d6c"/><text x="0" y="42" fill="#ff5d6c" font-size="14" text-anchor="middle" font-family="sans-serif">N</text></g>
+    <g font-family="-apple-system,sans-serif">${blocks.join("")}</g>${arrow}
   </svg>`;
 }
 
@@ -473,6 +491,13 @@ function updateStatus(){
     + (state.headingOn?(state.headingValid?` · 🧭`:` · 🧭?`):` · N↑`);
   p.textContent=`GPS ±${acc.toFixed(0)}m`;
   p.className="pill "+(acc<=10?"good":acc<=25?"mid":"bad");
+  // 배경 약도 켜면 좌표 확인용으로 현재 GPS 좌표 표시(탭 복사)
+  const lg=document.getElementById("legend");
+  if(state.bgOn){
+    lg.innerHTML=`📍 <b>${state.fix.lat.toFixed(6)}, ${state.fix.lng.toFixed(6)}</b> ±${acc.toFixed(0)}m <span style="opacity:.55">· 탭하면 복사</span>`;
+  } else {
+    lg.innerHTML=`링: <b>150m</b> / <b>300m</b> / <b>450m</b> / <b>600m</b>`;
+  }
 }
 
 /* ════════════════════════ Geolocation ════════════════════════ */
@@ -576,6 +601,22 @@ document.getElementById("recenterBtn").onclick=()=>{
   if(state.rawFix){ state.fix={...state.rawFix}; toast("현재 위치로 정렬"); }
   else if(state.sim){ applyFix(SITE_CENTER.lat, SITE_CENTER.lng, 8); }
 };
+
+/* ════════════════════════ 배경 부지 약도 토글 ════════════════════════ */
+document.getElementById("bgBtn").onclick=()=>{
+  state.bgOn=!state.bgOn;
+  document.getElementById("bgBtn").classList.toggle("on", state.bgOn);
+  if(state.bgOn) toast("배경 약도 ON — 건물 블록과 현재 위치(중심)를 비교해 좌표를 확인하세요");
+  updateStatus();
+};
+// 배경 ON 시 표시되는 현재 좌표를 탭하면 복사 (실측값 기록용)
+document.getElementById("legend").onclick=async()=>{
+  if(!state.bgOn || !state.fix) return;
+  const txt=`${state.fix.lat.toFixed(6)}, ${state.fix.lng.toFixed(6)}`;
+  try{ await navigator.clipboard.writeText(txt); toast("좌표 복사됨: "+txt); }
+  catch{ toast(txt); }
+};
+initSiteBg();
 
 /* ════════════════════════ 토스트 ════════════════════════ */
 let toastT=null;
