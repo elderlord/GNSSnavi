@@ -38,6 +38,11 @@
   button.on{background:var(--acc);color:#022;border-color:var(--acc);}
   button:active{transform:translateY(1px);}
 
+  /* 위치가 부정확해 자동 전환을 못 할 때 뜨는 수동 약도 버튼 */
+  #nearBtn{position:absolute;left:50%;transform:translateX(-50%);bottom:112px;z-index:15;
+    background:var(--warn);color:#221a02;border-color:var(--warn);font-size:14px;padding:11px 18px;
+    box-shadow:0 4px 18px rgba(0,0,0,.45);}
+
   #legend{position:absolute;left:8px;bottom:70px;font-size:11px;color:var(--dim);pointer-events:auto;cursor:pointer;}
   #legend b{color:var(--grid);}
 
@@ -82,6 +87,8 @@
     <div id="legend">
       링: <b>150m</b> / <b>300m</b> / <b>450m</b> / <b>600m</b>
     </div>
+
+    <button id="nearBtn" class="hidden">🏛 약도 보기</button>
 
     <div id="controls" class="panel">
       <button id="compassBtn">🧭 나침반</button>
@@ -166,7 +173,16 @@ const SITE_BOUNDS = (() => {
 })();
 
 /* 지오펜스 히스테리시스 파라미터 (§4.2) */
-const GEO = { OUT_MARGIN: 15 /* R_out = radiusIn + 15m */, DWELL_MS: 3000 /* T=3초 */ };
+const GEO = {
+  OUT_MARGIN: 15,   // R_out = radiusIn + 15m (경계 떨림 방지 댐퍼)
+  DWELL_MS: 3000,   // T = 3초 지속 시 판정
+  // ── 정확도 적응 ──
+  // 실시간 위치 오차가 크면 반경 28m 판정은 의미가 없어진다(±40m면 50m 밖에서도 '진입'으로 보임).
+  // 그래서 정확도가 나쁠수록 진입 반경은 좁히고(오진입 방지) 이탈 반경은 넓힌다(오이탈 방지).
+  ACC_K: 0.5,       // 정확도 1m당 유효반경 보정량
+  MIN_EFF_R: 8,     // 유효 진입반경이 이보다 작아지면 자동 전환을 포기하고 수동 제안으로
+  NEAR_MULT: 1.8,   // 수동 제안을 띄울 근접 범위 (radiusIn 배수)
+};
 
 /* 레이더 스케일 2단 고정 (§4.1) */
 const SCALE = { INNER_M: 150, OUTER_M: 600, INNER_FRAC: 0.60 }; // 0~150m→0~60%, 150~600m→60~100%
@@ -417,21 +433,50 @@ setInterval(()=>{ if(state.fix) evalGeofence(); }, 500);
 function evalGeofence(){
   if(!state.fix) return;
   const now = performance.now();
+  const acc = state.fix.acc ?? 0;
+  let suggest = null;   // 자동 전환은 못 하지만 가까운 관(수동 제안 후보)
+
   for(const v of VENUES){
     const st = geoTimers.get(v.id);
     const d = haversine(state.fix, v);
-    const rIn = v.radiusIn, rOut = v.radiusIn + GEO.OUT_MARGIN;
+    // 정확도 적응 반경
+    const rInEff  = v.radiusIn - GEO.ACC_K * acc;
+    const rOutEff = v.radiusIn + GEO.OUT_MARGIN + GEO.ACC_K * acc;
+    const reliable = rInEff >= GEO.MIN_EFF_R;   // 자동 전환을 신뢰할 수 있는 정확도인가
+
     if(!st.inside){
-      if(d < rIn){ st.sinceIn = st.sinceIn ?? now; st.sinceOut=null;
-        if(now - st.sinceIn >= GEO.DWELL_MS){ st.inside=true; st.sinceIn=null; enterIndoor(v); } }
-      else st.sinceIn=null;
-    }else{
-      if(d > rOut){ st.sinceOut = st.sinceOut ?? now; st.sinceIn=null;
-        if(now - st.sinceOut >= GEO.DWELL_MS){ st.inside=false; st.sinceOut=null; if(state.indoor && state.indoor.id===v.id) exitIndoor(v); } }
-      else st.sinceOut=null;
+      if(reliable && d < rInEff){
+        st.sinceIn = st.sinceIn ?? now; st.sinceOut = null;
+        if(now - st.sinceIn >= GEO.DWELL_MS){ st.inside = true; st.sinceIn = null; enterIndoor(v); }
+      } else {
+        st.sinceIn = null;
+        // 정확도가 나빠 자동 전환은 못 하지만 근처인 경우 → 사용자가 직접 열도록 제안
+        if(!reliable && d < v.radiusIn * GEO.NEAR_MULT && (!suggest || d < suggest.d)) suggest = { v, d };
+      }
+    } else {
+      if(d > rOutEff){
+        st.sinceOut = st.sinceOut ?? now; st.sinceIn = null;
+        if(now - st.sinceOut >= GEO.DWELL_MS){
+          st.inside = false; st.sinceOut = null;
+          if(state.indoor && state.indoor.id === v.id) exitIndoor(v);
+        }
+      } else st.sinceOut = null;
     }
   }
+  updateNearSuggest(state.indoor ? null : suggest);
 }
+
+// 근처지만 위치가 부정확할 때 뜨는 수동 약도 버튼
+function updateNearSuggest(s){
+  const btn = document.getElementById("nearBtn");
+  if(!s){ btn.classList.add("hidden"); btn.__venue = null; return; }
+  btn.__venue = s.v;
+  btn.textContent = `🏛 ${s.v.name} 약도 보기 (위치 부정확)`;
+  btn.classList.remove("hidden");
+}
+document.getElementById("nearBtn").onclick = function(){
+  if(this.__venue) enterIndoor(this.__venue);   // 수동 진입(지오펜스 상태는 건드리지 않음)
+};
 function enterIndoor(v){
   state.indoor=v;
   document.getElementById("indoorName").textContent=v.name;
