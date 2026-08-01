@@ -296,6 +296,7 @@ window.__gnssnavi = {
   snapToPaths, closestOnSeg, toLocalM, fromLocalM, SNAP,
   getState: () => state,
   POS: () => POS(),
+  pickCandidate: (c) => pickCandidate(c),
   setPaths: (arr) => { PATHS.length = 0; PATHS.push(...arr); },
 };
 
@@ -520,11 +521,36 @@ function applyFix(lat,lng,acc,speed=null,crs=null){
 // (관 안에 정지해 있으면 watchPosition 콜백이 안 와서 진입 판정이 누락됨)
 setInterval(()=>{ if(state.fix) evalGeofence(); }, 500);
 
+// 반경 조건을 만족한 관이 여럿일 때 하나를 고른다.
+// 입구가 20m 간격으로 붙어 있으면 반경 판정만으로는 구분이 안 되므로
+// ① 스냅된 지선의 관 → ② 진행방향과 가장 잘 맞는 관 → ③ 최근접 순으로 좁힌다.
+// (이 함수가 없으면 VENUES 배열 순서로 결정되어 사실상 임의값이 된다)
+function pickCandidate(cands){
+  if(!cands || !cands.length) return null;
+  if(cands.length === 1) return cands[0];
+  // ① 지선 스냅
+  const sv = state.snap && state.snap.venue;
+  if(sv){ const hit = cands.find(c => c.v.id === sv); if(hit) return hit; }
+  // ② 진행방향 정합 — 마주보는 문은 180° 차이라 판정 여유가 크다
+  const hd = state.courseHeading;
+  if(hd != null){
+    let best = null;
+    for(const c of cands){
+      const align = Math.cos((bearing(POS(), c.v) - hd)*D2R);   // 1=정확히 그쪽
+      if(!best || align > best.align) best = { c, align };
+    }
+    if(best) return best.c;
+  }
+  // ③ 최근접
+  return cands.slice().sort((a,b) => a.d - b.d)[0];
+}
+
 function evalGeofence(){
   if(!state.fix) return;
   const now = performance.now();
   const acc = state.fix.acc ?? 0;
   let suggest = null;   // 자동 전환은 못 하지만 가까운 관(수동 제안 후보)
+  const ready = [];     // dwell 을 채운 진입 후보들
 
   for(const v of VENUES){
     const st = geoTimers.get(v.id);
@@ -537,7 +563,8 @@ function evalGeofence(){
     if(!st.inside){
       if(reliable && d < rInEff){
         st.sinceIn = st.sinceIn ?? now; st.sinceOut = null;
-        if(now - st.sinceIn >= GEO.DWELL_MS){ st.inside = true; st.sinceIn = null; enterIndoor(v); }
+        // 진입 조건을 만족한 관은 후보로만 모으고, 실제 진입은 루프 뒤에서 하나만 시킨다
+        if(now - st.sinceIn >= GEO.DWELL_MS) ready.push({ v, d, st });
       } else {
         st.sinceIn = null;
         // 정확도가 나빠 자동 전환은 못 하지만 근처인 경우 → 사용자가 직접 열도록 제안
@@ -552,6 +579,14 @@ function evalGeofence(){
         }
       } else st.sinceOut = null;
     }
+  }
+  // 진입 후보가 여럿이면 하나만 고른다(배열 순서로 결정되지 않게)
+  if(ready.length){
+    const win = pickCandidate(ready);
+    win.st.inside = true; win.st.sinceIn = null;
+    enterIndoor(win.v);
+    // 나머지 후보는 dwell 타이머만 되돌려 다음 기회를 기다린다
+    for(const c of ready) if(c !== win) c.st.sinceIn = null;
   }
   updateNearSuggest(state.indoor ? null : suggest);
 }

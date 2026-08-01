@@ -164,6 +164,60 @@ const near = (a, b, tol) => Math.abs(a - b) <= tol;
     await ctx2.close();
   }
 
+  // ── 10) 인접 두 관 중 스냅된 지선의 관이 선택된다 ──
+  // 이 테스트는 '반경이 겹치는 두 관'이 실제로 존재해야 의미가 있다.
+  // 현재 VENUES 에서 겹치는 쌍은 hall-tech(과학기술관, r=30) ↔ hall-future(미래기술관, r=28)
+  // 뿐이다(거리 14.1m). 두 관의 좌표가 재측정되어 더 이상 겹치지 않게 되면
+  // 아래 (b) 가 실패하며, 그때는 겹치는 다른 쌍으로 시나리오를 옮겨야 한다.
+  {
+    const AT = { latitude: 36.376690, longitude: 127.374720, accuracy: 8 };  // 과학기술관 좌표
+
+    // (a) 경로가 없을 때 무엇이 열리는지 — 판별 이전의 기준선
+    const ctxA = await browser.newContext({ geolocation: AT, permissions: ['geolocation'] });
+    const pA = await ctxA.newPage();
+    await pA.goto('file://' + ROOT + '/index.html');
+    await pA.click('#startBtn');
+    await pA.waitForTimeout(4200);   // dwell 3초 + 여유
+    const baseline = (await pA.textContent('#indoorName')).trim();
+    await ctxA.close();
+
+    // (b) 미래기술관 지선을 주면 미래기술관이 열려야 한다
+    const ctxB = await browser.newContext({ geolocation: AT, permissions: ['geolocation'] });
+    const pB = await ctxB.newPage();
+    await pB.goto('file://' + ROOT + '/index.html');
+    await pB.evaluate(() => {
+      window.__gnssnavi.setPaths([{
+        id: 'spur-future', name: '미래기술관 지선', venue: 'hall-future',
+        pts: [[36.376770, 127.374600], [36.376780, 127.374610]],
+      }]);
+    });
+    await pB.click('#startBtn');
+    await pB.waitForTimeout(4200);
+    const withSpur = (await pB.textContent('#indoorName')).trim();
+    const shown = await pB.evaluate(() =>
+      document.getElementById('indoor').classList.contains('show'));
+    await ctxB.close();
+
+    check('지선 스냅이 관 판별을 결정한다', shown && withSpur === '미래기술관',
+      `경로없음→${baseline} / 지선있음→${withSpur} (shown=${shown})`);
+  }
+
+  // ── 11) pickCandidate: 스냅 venue 없으면 진행방향, 그것도 없으면 최근접 ──
+  {
+    const p4 = await (await browser.newContext()).newPage();
+    await p4.goto('file://' + ROOT + '/index.html');
+    const r = await p4.evaluate(() => {
+      const G = window.__gnssnavi;
+      const s = G.getState();
+      s.fix = { lat: 36.3766, lng: 127.3747, acc: 8 };
+      s.snap = null;
+      s.courseHeading = null;
+      const cands = [{ v: { id: 'far' }, d: 50 }, { v: { id: 'near' }, d: 10 }];
+      return G.pickCandidate(cands).v.id;
+    });
+    check('스냅·방향 없으면 최근접을 고른다', r === 'near', `picked=${r}`);
+  }
+
   await browser.close();
   console.log(failures ? `\n${failures}건 실패` : '\n전부 통과');
   process.exit(failures ? 1 : 0);
