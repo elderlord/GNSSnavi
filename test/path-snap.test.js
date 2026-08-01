@@ -181,6 +181,12 @@ const near = (a, b, tol) => Math.abs(a - b) <= tol;
     const baseline = (await pA.textContent('#indoorName')).trim();
     await ctxA.close();
 
+    // 기준선 자체를 단언한다 — 두 관이 정말 겹쳐 있어야 (b) 가 의미를 가진다.
+    // 좌표가 재측정되어 겹침이 사라지면 여기서 먼저 요란하게 실패해야,
+    // (b) 의 성공이 '지선 덕분'인지 '더 이상 안 겹쳐서'인지 헷갈리지 않는다.
+    check('  기준선: 경로가 없으면 과학기술관이 열린다(두 관이 겹쳐 있음)',
+      baseline === '과학기술관', `baseline=${baseline}`);
+
     // (b) 미래기술관 지선을 주면 미래기술관이 열려야 한다
     const ctxB = await browser.newContext({ geolocation: AT, permissions: ['geolocation'] });
     const pB = await ctxB.newPage();
