@@ -120,6 +120,38 @@ async function scenario(browser, { pos, acc }) {
     check('A→B→A: 콘솔 에러 없음', errs.length === 0, errs.join(';'));
   }
 
+  // ⑥ 잘못된 PATHS 점 하나가 POS() 전체를 NaN 으로 오염시키지 않는다 (가드)
+  //   PATHS 는 path.html 출력을 손으로 붙여넣어 만든다 — 경도가 빠진 [36.376770] 같은
+  //   항목이 현실적으로 들어올 수 있다. 그러면 d 가 NaN 이 되고 `d < best.dist` 비교가
+  //   전부 false 라 best 가 NaN 인 채로 굳으며, tol 비교(`>`)도 false 라 걸러지지 않아
+  //   POS() 가 {NaN,NaN} 을 내놓는다 — 마커·거리·지오펜스가 조용히 전부 죽는다.
+  {
+    const page = await (await browser.newContext()).newPage();
+    await page.goto('file://' + ROOT + '/index.html');
+    const r = await page.evaluate(() => {
+      const G = window.__gnssnavi;
+      const BASE = { lat: 36.376770, lng: 127.374600 };
+      const mLng = 111320 * Math.cos(BASE.lat * Math.PI / 180);
+      // (a) 경도가 빠진 점만 있는 경로 → null 이어야 한다 (NaN 좌표 금지)
+      const onlyBad = G.snapToPaths(BASE, 8, [
+        { id: 'bad', name: '경도 누락', pts: [[BASE.lat], [BASE.lat + 1e-4, BASE.lng]] },
+      ]);
+      // (b) 망가진 경로가 먼저 와도 뒤의 정상 경로 판정을 오염시키면 안 된다
+      const withGood = G.snapToPaths({ lat: BASE.lat, lng: BASE.lng + 10 / mLng }, 8, [
+        { id: 'bad', name: '경도 누락', pts: [[BASE.lat], [BASE.lat + 1e-4, BASE.lng]] },
+        { id: 'good', name: '남북 직선', pts: [
+          [BASE.lat - 50 / 111132, BASE.lng], [BASE.lat + 50 / 111132, BASE.lng]] },
+      ]);
+      return { onlyBad, withGood };
+    });
+    check('망가진 경로만 있으면 null (NaN 좌표를 내지 않는다)',
+      r.onlyBad === null, `결과=${JSON.stringify(r.onlyBad)}`);
+    check('망가진 경로가 정상 경로 판정을 오염시키지 않는다',
+      r.withGood && r.withGood.pathId === 'good' && Number.isFinite(r.withGood.dist)
+        && Number.isFinite(r.withGood.lat) && Number.isFinite(r.withGood.lng),
+      `결과=${JSON.stringify(r.withGood)}`);
+  }
+
   await browser.close();
   console.log(failures ? `\n${failures}건 실패` : '\n전부 통과');
   process.exit(failures ? 1 : 0);
