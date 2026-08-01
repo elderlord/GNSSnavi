@@ -46,7 +46,7 @@
 >   적용하지 않습니다. 측정값에 보정을 섞으면 실측의 의미가 사라집니다
 > - 근거·한계: `docs/outdoor-microscale-tracking_litreview/08_implications.md`
 >   (문헌 성능은 도시 교통망 기준이고 과학관 산책로 규모의 선행연구는 없습니다 — 현장 검증 필수)
-> - 검증 테스트: `node test/path-snap.test.js`
+> - 검증 테스트: `node test/path-record.test.js` (기록 도구), `node test/path-snap.test.js` (스냅 엔진)
 
 **연결된 층 약도** (`maps/`, 7개 관 전부): 자연사관(1·2층) · 과학기술관(지하1·1·중층·2층) ·
 미래기술관(1·2층) · 창의나래관(1·2·3층) · 어린이과학관(1·2층) · 천체관(단일) · 생물탐구관(단일).
