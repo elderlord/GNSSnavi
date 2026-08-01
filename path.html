@@ -131,7 +131,9 @@ function render(curAcc){
   $("simp").textContent = `${s.length}개`;
 
   const venue = $("kind").value;
-  const name = ($("pname").value || "이름없음").trim();
+  // 스니펫은 index.html 에 붙여넣을 JS 문자열 리터럴이다. 따옴표·역슬래시가 든 이름을
+  // 그대로 끼워 넣으면 붙여넣은 순간 파일 전체가 파싱 실패한다.
+  const name = ($("pname").value || "이름없음").trim().replace(/[\\"]/g, m => "\\" + m);
   const id = venue === "main" ? "main-" + Date.now().toString(36).slice(-4) : "spur-" + venue.replace("hall-","");
   const body = s.map(p => `[${p.lat.toFixed(6)},${p.lng.toFixed(6)}]`).join(",\n         ");
   $("out").textContent =

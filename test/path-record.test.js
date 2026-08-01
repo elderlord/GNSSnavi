@@ -116,6 +116,20 @@ const north = (lat, d) => lat + d / 111132;
     check('  종류 변경 후 스니펫이 갱신된다', hasVenue && isSpur,
       `snippet=${snippetAfterKind.trim().split('\n')[0]}`);
 
+    // ④-b 이름의 따옴표·역슬래시는 이스케이프된다
+    // 스니펫은 index.html 에 붙여넣을 JS 리터럴이라, 이스케이프 없이는 붙여넣는 순간
+    // 파일 전체가 파싱 실패한다(요란하게 깨지긴 하지만 그래도 못 쓴다).
+    await page.fill('#pname', '정문 "본"\\길');
+    await page.waitForTimeout(100);
+    const nameLine = (await page.textContent('#out')).trim().split('\n')[0];
+    const parsed = await page.evaluate((line) => {
+      const m = line.match(/name:"((?:[^"\\]|\\.)*)"/);
+      if (!m) return null;
+      try { return JSON.parse('"' + m[1] + '"'); } catch { return 'PARSE_FAIL'; }
+    }, nameLine);
+    check('④-b 이름의 따옴표·역슬래시가 이스케이프된다', parsed === '정문 "본"\\길',
+      `snippet=${nameLine} / 복원=${JSON.stringify(parsed)}`);
+
     // 페이지 오류 확인 (Round 2 버그: Event.toFixed())
     const noErrors = errs.length === 0;
     check('  폼 편집 중 페이지 오류 없음', noErrors,
