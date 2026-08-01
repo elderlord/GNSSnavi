@@ -246,6 +246,89 @@ const near = (a, b, tol) => Math.abs(a - b) <= tol;
     check('스냅·방향 없으면 최근접을 고른다', r === 'near', `picked=${r}`);
   }
 
+  // ── 12) 시뮬 드래그가 스냅을 다시 계산한다 ──
+  // state.fix 를 applyFix 밖에서 고치는 곳(시뮬 드래그·정렬 리셋)이 state.snap 을
+  // 갱신하지 않으면, POS() 가 옛 스냅 좌표를 계속 돌려줘 레이더가 통째로 얼거나
+  // (스냅이 있었던 경우) 시뮬 내내 스냅이 한 번도 걸리지 않는다(없었던 경우).
+  // 시뮬 모드는 GPS 없이 배치를 검증하는 공식 수단이라 두 경우 다 치명적이다.
+  {
+    const B = { lat: 36.375545, lng: 127.376772 };
+    const NS = (lng) => [[B.lat - 50 / 111132, lng], [B.lat + 50 / 111132, lng]];
+
+    // (a) 스냅이 걸린 상태로 시뮬에 들어가 드래그하면 POS() 가 따라 움직여야 한다
+    const ctxS = await browser.newContext({
+      viewport: { width: 414, height: 896 },
+      geolocation: { latitude: B.lat, longitude: B.lng, accuracy: 8 },
+      permissions: ['geolocation'],
+    });
+    const pS = await ctxS.newPage();
+    await pS.goto('file://' + ROOT + '/index.html');
+    await pS.evaluate(({ NS, B }) => window.__gnssnavi.setPaths(
+      [{ id: 'p1', name: '남북 직선', pts: NS }]), { NS: NS(B.lng), B });
+    await pS.click('#startBtn');
+    await pS.waitForTimeout(700);
+    const before = await pS.evaluate(() => {
+      const G = window.__gnssnavi;
+      return { snapped: !!G.getState().snap, pos: G.POS() };
+    });
+    check('시뮬 전: 경로 위라 스냅이 걸려 있다', before.snapped === true);
+
+    await pS.click('#simBtn');
+    const box = await pS.locator('#radar').boundingBox();
+    const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
+    await pS.mouse.move(cx, cy);
+    await pS.mouse.down();
+    await pS.mouse.move(cx - 6, cy, { steps: 3 });   // 동쪽으로 몇 m 이동
+    await pS.mouse.up();
+    await pS.waitForTimeout(200);
+    const after = await pS.evaluate(() => {
+      const G = window.__gnssnavi;
+      const s = G.getState();
+      return { snapped: !!s.snap, pos: G.POS(), fix: { lat: s.fix.lat, lng: s.fix.lng } };
+    });
+    const moved = Math.abs(after.pos.lng - before.pos.lng) > 1e-7;
+    check('시뮬 드래그 시 POS() 가 따라 움직인다 (레이더가 얼지 않는다)', moved,
+      `before=${before.pos.lng} after=${after.pos.lng}`);
+    // 스냅은 fix 와 경로 사이에 남아 있어야 한다 (옛 위치 기준으로 굳으면 안 됨)
+    const between = after.snapped && after.pos.lng > B.lng && after.pos.lng < after.fix.lng;
+    check('스냅이 현재 fix 기준으로 다시 계산된다', between,
+      `경로=${B.lng} POS=${after.pos.lng} fix=${after.fix.lng}`);
+    await ctxS.close();
+
+    // (b) 스냅이 없던 상태에서 경로 위로 이동하면 시뮬에서도 스냅이 걸려야 한다
+    const ctxT = await browser.newContext({
+      viewport: { width: 414, height: 896 },
+      geolocation: { latitude: B.lat, longitude: B.lng, accuracy: 8 },
+      permissions: ['geolocation'],
+    });
+    const pT = await ctxT.newPage();
+    await pT.goto('file://' + ROOT + '/index.html');
+    await pT.click('#startBtn');            // PATHS 는 비어 있음(출하 구성) → snap=null
+    await pT.waitForTimeout(700);
+    const nullFirst = await pT.evaluate(() => window.__gnssnavi.getState().snap === null);
+    check('경로 없으면 스냅 없음(출하 구성)', nullFirst === true);
+    await pT.click('#simBtn');
+    // 현재 fix 를 지나는 경로를 등록 — 다음 드래그에서 스냅이 걸려야 한다
+    await pT.evaluate(() => {
+      const s = window.__gnssnavi.getState();
+      window.__gnssnavi.setPaths([{ id: 'p1', name: '남북 직선', pts: [
+        [s.fix.lat - 50 / 111132, s.fix.lng], [s.fix.lat + 50 / 111132, s.fix.lng]] }]);
+    });
+    const box2 = await pT.locator('#radar').boundingBox();
+    const cx2 = box2.x + box2.width / 2, cy2 = box2.y + box2.height / 2;
+    await pT.mouse.move(cx2, cy2);
+    await pT.mouse.down();
+    await pT.mouse.move(cx2 - 3, cy2, { steps: 2 });   // 몇 m 만 이동(허용 거리 안)
+    await pT.mouse.up();
+    await pT.waitForTimeout(200);
+    const snappedNow = await pT.evaluate(() => {
+      const s = window.__gnssnavi.getState();
+      return { on: !!s.snap, id: s.snap && s.snap.pathId };
+    });
+    check('시뮬 모드에서도 스냅이 새로 걸린다', snappedNow.on === true, `pathId=${snappedNow.id}`);
+    await ctxT.close();
+  }
+
   await browser.close();
   console.log(failures ? `\n${failures}건 실패` : '\n전부 통과');
   process.exit(failures ? 1 : 0);

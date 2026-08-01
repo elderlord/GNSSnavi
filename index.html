@@ -494,6 +494,11 @@ function POS(){
   if(state.snapOn && state.snap) return { lat:state.snap.lat, lng:state.snap.lng, acc:state.fix.acc };
   return state.fix;
 }
+// state.fix 를 바꾼 곳은 반드시 이걸 부른다. POS() 는 state.snap 이 있으면 그쪽을
+// 쓰므로, 스냅을 갱신하지 않고 fix 만 옮기면 화면이 옛 스냅 좌표에 얼어붙는다.
+function refreshSnap(){
+  state.snap = state.snapOn && state.fix ? snapToPaths(state.fix, state.fix.acc) : null;
+}
 function applyFix(lat,lng,acc,speed=null,crs=null){
   state.rawFix={lat,lng,acc};
   if(!state.fix){ state.fix={lat,lng,acc}; }
@@ -505,7 +510,7 @@ function applyFix(lat,lng,acc,speed=null,crs=null){
     state.fix.acc = acc;
   }
   // 산책로 경로망 스냅 — 조건 미달이면 null 이라 원위치가 유지된다
-  state.snap = state.snapOn ? snapToPaths(state.fix, state.fix.acc) : null;
+  refreshSnap();
   // GPS 진행방향(course over ground): 기기가 heading을 주면 사용, 아니면 원시 위치 이력으로 계산.
   // 정지 상태(느린 속도/짧은 이동)에서는 갱신하지 않아 마지막 진행방향을 유지한다.
   const here={lat,lng};
@@ -871,6 +876,7 @@ window.addEventListener("pointermove", e=>{
     state.fix.lat += n2/metersPerDegLat();
     state.fix.lng += e2/metersPerDegLng(state.fix.lat);
     state.fix.acc=8; state.rawFix={...state.fix};
+    refreshSnap();   // 시뮬 이동도 스냅을 다시 계산해야 화면이 따라온다
     updateStatus(); evalGeofence();
   } else if(!state.sim && rot){
     // 손가락 회전각만큼 화면을 돌린다(콘텐츠가 손가락을 따라오도록 heading을 반대로 이동)
@@ -886,7 +892,7 @@ window.addEventListener("pointerup", ()=>{ drag=null; rot=null; });
 // 정렬 리셋: North-up 복귀 + 수동각 초기화 + 위치 튐 리셋
 document.getElementById("recenterBtn").onclick=()=>{
   state.manualHeading=0; setMode('north');
-  if(state.rawFix){ state.fix={...state.rawFix}; }
+  if(state.rawFix){ state.fix={...state.rawFix}; refreshSnap(); }
   else if(state.sim){ applyFix(SITE_CENTER.lat, SITE_CENTER.lng, 8); }
   toast("North-up 정렬 + 위치 리셋");
 };
@@ -904,8 +910,7 @@ document.getElementById("bgBtn").onclick=()=>{
 document.getElementById("snapBtn").onclick=()=>{
   state.snapOn=!state.snapOn;
   document.getElementById("snapBtn").classList.toggle("on", state.snapOn);
-  if(!state.snapOn) state.snap=null;
-  else if(state.fix) state.snap=snapToPaths(state.fix, state.fix.acc);
+  refreshSnap();
   toast(state.snapOn ? "경로 스냅 ON" : "경로 스냅 OFF — 원시 위치 표시");
   updateStatus();
 };
