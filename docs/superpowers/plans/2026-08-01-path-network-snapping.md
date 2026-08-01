@@ -285,7 +285,8 @@ r=subprocess.run(['node','--check','/tmp/_c.js'],capture_output=True,text=True)
 print('syntax:', 'OK' if r.returncode==0 else r.stderr)"
 CHROME="/opt/pw-browsers/chromium-1194/chrome-linux/chrome" node test/path-snap.test.js
 ```
-Expected: `syntax: OK` 그리고 9항목 `전부 통과`
+Expected: `syntax: OK` 그리고 11항목 `전부 통과`
+(아래 8개 번호 섹션 중 일부가 검사 2개를 내므로 `check()` 호출은 11회다 — 실측 11항목이 정답)
 
 - [ ] **Step 6: 기존 테스트 회귀를 확인한다**
 
@@ -308,7 +309,7 @@ git commit -m "경로망 스냅 엔진 추가 (순수 함수)
 min(K_TOL*hypot(acc,PATH_ERR), SNAP_MAX) 이내일 때만 정확도 기반 가중 보간으로
 위치를 이동시킨다. PATHS 가 비면 완전 비활성이라 기존 동작에 영향이 없다.
 
-테스트 9항목: 수직거리·가중치·선분밖 끝점·허용거리 초과·절대상한·지선 venue·
+테스트 11항목: 수직거리·가중치·선분밖 끝점·허용거리 초과·절대상한·지선 venue·
 빈 경로·점2개미만"
 ```
 
@@ -624,13 +625,37 @@ function pickCandidate(cands){
 ```javascript
   // 진입 후보가 여럿이면 하나만 고른다(배열 순서로 결정되지 않게)
   if(ready.length){
-    const win = pickCandidate(ready);
-    win.st.inside = true; win.st.sinceIn = null;
-    enterIndoor(win.v);
+    const cands = ready.slice();
+    // 이미 들어와 있는 관이 아직 이탈 전이면 후보로 함께 넣는다.
+    // 넣지 않으면 패자가 dwell 을 다시 채워 단독으로 ready 에 올라
+    // 우선순위 비교 없이 판정을 뒤집는다(아래 ⚠ 참조).
+    if(state.indoor){
+      const cur = VENUES.find(v => v.id === state.indoor.id);
+      const curSt = cur && geoTimers.get(cur.id);
+      if(cur && curSt && curSt.inside && !cands.some(c => c.v.id === cur.id)){
+        const dCur = haversine(POS(), cur);
+        if(dCur <= cur.radiusIn + GEO.OUT_MARGIN + GEO.ACC_K*acc) cands.push({ v:cur, d:dCur, st:curSt });
+      }
+    }
+    const win = pickCandidate(cands);
+    if(win){
+      win.st.inside = true; win.st.sinceIn = null;
+      // 이미 보여주고 있는 관이 이기면 다시 그리지 않는다(선택한 층이 초기화되지 않게)
+      if(!state.indoor || state.indoor.id !== win.v.id) enterIndoor(win.v);
+    }
     // 나머지 후보는 dwell 타이머만 되돌려 다음 기회를 기다린다
-    for(const c of ready) if(c !== win) c.st.sinceIn = null;
+    for(const c of cands) if(c !== win) c.st.sinceIn = null;
   }
 ```
+
+> ⚠ **이 블록은 최초 계획서에서 한 번 수정되었다.** 원안은 `pickCandidate(ready)` 로 승자를 정하고
+> 패자의 `sinceIn` 만 `null` 로 되돌렸다. 그러면 반경이 영구히 겹치는 두 관(실측상
+> `hall-tech` ↔ `hall-future`, 14.1m)에서 패자가 dwell 을 다시 채우는데, 승자는
+> `st.inside=true` 라 `!st.inside` 분기에서 빠져 있으므로 `DWELL_MS` 후 **패자가 ready 에 단독으로**
+> 올라간다. 그러면 `pickCandidate` 의 `cands.length===1` 조기 반환에 걸려 스냅·진행방향
+> 우선순위를 **건너뛰고** 진입해, 정지해 있는 사용자의 화면이 엉뚱한 관으로 바뀐다.
+> 실증(수정 전, 정지 상태): `t≈4.2s 미래기술관 → t≈7.2s 과학기술관`.
+> 회귀 테스트는 `test/path-snap.test.js` 의 10b.
 
 - [ ] **Step 5: 테스트 seam 에 `pickCandidate` 를 노출한다**
 
@@ -655,7 +680,7 @@ CHROME="/opt/pw-browsers/chromium-1194/chrome-linux/chrome" node test/path-snap.
 CHROME="/opt/pw-browsers/chromium-1194/chrome-linux/chrome" node test/geofence-adaptive.test.js
 CHROME="/opt/pw-browsers/chromium-1194/chrome-linux/chrome" node test/collect-gate.test.js
 ```
-Expected: 전부 통과 (`path-snap` 15항목 포함)
+Expected: 전부 통과 (`path-snap` 16항목 포함 — Task 2 에서 5항목이 추가되어 11→16)
 
 - [ ] **Step 7: 커밋**
 
@@ -936,7 +961,9 @@ Expected: 채택 40/45(±30m 샘플 5개는 버려짐), 길이 약 78m, 단순�
 | `path.html` | 산책로 기록 도구 (걸으며 트랙 기록 → 단순화 → `PATHS` 스니펫) |
 ```
 
-그리고 구현 단계 체크리스트의 마지막 `- [ ]` 항목 **바로 뒤**에 삽입한다:
+그리고 구현 단계 체크리스트의 **마지막 항목 바로 뒤**에 삽입한다
+(원안은 "마지막 `- [ ]` 항목"이라 적었으나 README 의 체크리스트는 전부 `- [x]` 다 —
+현재 마지막 항목은 `- [x] 배경 약도 …` 줄):
 
 ```markdown
 - [x] 산책로 경로망 스냅 — 위치를 등록된 경로 위로 끌어와 횡방향 오차 감소
