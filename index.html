@@ -1,0 +1,947 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>과학관 레이더</title>
+<style>
+  :root{
+    --bg:#02100c; --grid:#16b46b; --grid-dim:#0c5c37; --scan:#2effa6;
+    --fg:#c9ffe6; --dim:#4f8a70; --acc:#2effa6; --warn:#ffcf5c; --err:#ff5d6c;
+    --panel:rgba(3,26,18,.82);
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--fg);
+    font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;-webkit-text-size-adjust:100%;}
+  #stage{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;}
+  canvas{display:block;touch-action:none;}
+
+  /* ── HUD ── */
+  #hud{position:fixed;inset:0;pointer-events:none;}
+  .panel{position:absolute;background:var(--panel);border:1px solid var(--grid-dim);
+    border-radius:12px;padding:10px 12px;backdrop-filter:blur(6px);pointer-events:auto;}
+  #topbar{top:env(safe-area-inset-top,8px);left:8px;right:8px;display:flex;gap:8px;align-items:center;
+    justify-content:space-between;flex-wrap:wrap;}
+  #topbar .title{font-weight:700;color:var(--acc);letter-spacing:.04em;}
+  #status{font-size:12px;color:var(--dim);}
+  #status b{color:var(--fg);font-weight:600;}
+  .pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;
+    border:1px solid currentColor;}
+  .pill.good{color:var(--acc);} .pill.mid{color:var(--warn);} .pill.bad{color:var(--err);} .pill.off{color:var(--dim);}
+
+  #controls{bottom:env(safe-area-inset-bottom,10px);left:8px;right:8px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;}
+  button{appearance:none;border:1px solid var(--grid-dim);background:rgba(4,40,28,.9);color:var(--fg);
+    border-radius:10px;padding:10px 14px;font-size:13px;font-weight:600;cursor:pointer;pointer-events:auto;touch-action:manipulation;}
+  button.on{background:var(--acc);color:#022;border-color:var(--acc);}
+  button:active{transform:translateY(1px);}
+
+  /* 위치가 부정확해 자동 전환을 못 할 때 뜨는 수동 약도 버튼 */
+  #nearBtn{position:absolute;left:50%;transform:translateX(-50%);bottom:112px;z-index:15;
+    background:var(--warn);color:#221a02;border-color:var(--warn);font-size:14px;padding:11px 18px;
+    box-shadow:0 4px 18px rgba(0,0,0,.45);}
+
+  #legend{position:absolute;left:8px;bottom:70px;font-size:11px;color:var(--dim);pointer-events:auto;cursor:pointer;}
+  #legend b{color:var(--grid);}
+
+  /* ── indoor overlay ── */
+  #indoor{position:fixed;inset:0;background:#020a07;display:none;flex-direction:column;z-index:20;}
+  #indoor.show{display:flex;}
+  #indoor .ihead{padding:calc(env(safe-area-inset-top,8px) + 10px) 14px 10px;display:flex;align-items:center;justify-content:space-between;}
+  #indoor .ihead .n{font-size:17px;font-weight:700;color:var(--acc);}
+  #indoor .floortabs{display:flex;gap:6px;padding:0 14px 6px;flex-wrap:wrap;justify-content:center;}
+  #indoor .floortabs:empty{display:none;}
+  #indoor .floortabs button{padding:7px 14px;font-size:13px;border-radius:999px;}
+  #indoor .floortabs button.on{background:var(--acc);color:#022;border-color:var(--acc);}
+  #indoor .imapwrap{flex:1;display:flex;align-items:center;justify-content:center;overflow:auto;padding:8px;}
+  #indoor img{max-width:100%;max-height:100%;object-fit:contain;border-radius:8px;}
+  #indoor .imapph{width:88%;max-width:520px;aspect-ratio:4/3;border:1px dashed var(--grid-dim);border-radius:12px;
+    display:flex;align-items:center;justify-content:center;color:var(--dim);text-align:center;padding:20px;font-size:13px;}
+  #indoor .ifoot{padding:12px 14px calc(env(safe-area-inset-bottom,8px) + 12px);text-align:center;color:var(--warn);font-size:12px;}
+
+  /* ── permission / intro gate ── */
+  #gate{position:fixed;inset:0;z-index:30;background:radial-gradient(circle at 50% 40%,#04241a,#010a07 70%);
+    display:flex;align-items:center;justify-content:center;padding:24px;}
+  #gate .box{max-width:420px;text-align:center;}
+  #gate h1{color:var(--acc);font-size:22px;margin:.2em 0;}
+  #gate p{color:var(--dim);font-size:13px;line-height:1.6;}
+  #gate .startbtn{margin-top:18px;background:var(--acc);color:#022;border-color:var(--acc);font-size:16px;padding:14px 28px;}
+  .hidden{display:none!important;}
+  .toast{position:fixed;left:50%;top:20%;transform:translateX(-50%);background:var(--panel);border:1px solid var(--grid-dim);
+    padding:10px 16px;border-radius:10px;z-index:40;font-size:13px;pointer-events:none;opacity:0;transition:opacity .3s;}
+  .toast.show{opacity:1;}
+</style>
+</head>
+<body>
+  <div id="stage"><canvas id="radar"></canvas></div>
+
+  <div id="hud">
+    <div id="topbar" class="panel">
+      <span class="title">◎ 과학관 레이더</span>
+      <span id="status">위치 확보 중…</span>
+      <span id="fixPill" class="pill off">GPS —</span>
+    </div>
+
+    <div id="legend">
+      링: <b>150m</b> / <b>300m</b> / <b>450m</b> / <b>600m</b>
+    </div>
+
+    <button id="nearBtn" class="hidden">🏛 약도 보기</button>
+
+    <div id="controls" class="panel">
+      <button id="compassBtn">🧭 나침반</button>
+      <button id="courseBtn">🚶 진행방향</button>
+      <button id="bgBtn">🗺 배경약도</button>
+      <button id="snapBtn" class="on">🛤 경로스냅</button>
+      <button id="simBtn">▶︎ 시뮬레이션</button>
+      <button id="recenterBtn">◎ 정렬 리셋</button>
+    </div>
+  </div>
+
+  <div id="indoor">
+    <div class="ihead">
+      <span class="n" id="indoorName">건물</span>
+      <button id="indoorClose">✕ 레이더로</button>
+    </div>
+    <div id="floorTabs" class="floortabs"></div>
+    <div class="imapwrap"><div id="indoorMap"></div></div>
+    <div class="ifoot">🛑 실내 진입 — 위치 추적을 중단했습니다. (건물 내부 측위 없음)</div>
+  </div>
+
+  <div id="gate">
+    <div class="box">
+      <h1>◎ 과학관 레이더</h1>
+      <p>야외 부지에서 전시관의 <b>방향과 거리</b>를 드래곤볼 레이더처럼 표시합니다.<br><br>
+        시작하면 <b>위치 권한</b>을 요청합니다. 나침반(방향 회전)은 선택 사항이며,
+        미지원·거부 시 <b>North-up(화면 위 = 북쪽)</b>으로 동작합니다.<br><br>
+        <span style="color:var(--warn)">실외 GPS 오차는 10~15m 수준입니다. 방향 안내용이며 "바로 앞 몇 m" 정밀도는 제공하지 않습니다.</span></p>
+      <button id="startBtn" class="startbtn">시작</button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+<script>
+(() => {
+"use strict";
+
+/* ══════════════════════════════════════════════════════════════════
+   데이터 — ★ lat/lng 는 실측 필요 (collect.html 로 수집).
+   아래 좌표는 국립중앙과학관(대전) 부근의 임시 더미값이며 배치 검증용.
+   ══════════════════════════════════════════════════════════════════ */
+const SITE_CENTER = { lat: 36.376600, lng: 127.374500 }; // ★ 부지 중심 (실측 필요)
+
+// 확정 7개 전시관. 좌표는 공식 안내도의 상대 배치를 참조한 ★더미(실측 필요).
+// 실내 진입 시 약도 표시 우선순위:  floors[] (층별)  >  mapImage (단일)  >  자체 부지 도식 하이라이트
+//   floors: [{ label:"1F", img:"maps/xxx-1f.png" }, ...]  ← 층 구분(수동 탭). 실내는 측위가 없어 자동 층감지 불가.
+const VENUES = [
+  { id:"hall-nature",   name:"자연사관",     lat:36.376960, lng:127.373160, radiusIn:30, // S1 중앙 서
+    floors:[ {label:"1층",img:"maps/hall-nature-1f.png"}, {label:"2층",img:"maps/hall-nature-2f.png"} ] },
+  { id:"hall-tech",     name:"과학기술관",   lat:36.376690, lng:127.374720, radiusIn:30, // N1 중앙
+    floors:[ {label:"지하1층",img:"maps/hall-tech-b1f.png"}, {label:"1층",main:true,img:"maps/hall-tech-1f.png"},
+             {label:"중층",img:"maps/hall-tech-1mf.png"}, {label:"2층",img:"maps/hall-tech-2f.png"} ] },
+  { id:"hall-future",   name:"미래기술관",   lat:36.376770, lng:127.374598, radiusIn:28, // 중앙 북 ⚠임시값 — ±22m 네트워크 측위(기준 ±12m 미달), 재측정 필요
+    floors:[ {label:"1층",img:"maps/hall-future-1f.png"}, {label:"2층",img:"maps/hall-future-2f.png"} ] },
+  { id:"hall-nari",     name:"창의나래관",   lat:36.375545, lng:127.376772, radiusIn:28, // ✔확정 2026-07-31 위성락 ±8m (채택 28/34, 산포 0.6m)
+    floors:[ {label:"1층",img:"maps/hall-nari-1f.png"}, {label:"2층",img:"maps/hall-nari-2f.png"}, {label:"3층",img:"maps/hall-nari-3f.png"} ] },
+  { id:"hall-children", name:"어린이과학관", lat:36.374675, lng:127.376312, radiusIn:28, // ✔확정 2026-07-31 위성락 대표 ±11m (양호 5/32, 기준 경계)
+    floors:[ {label:"1층",img:"maps/hall-children-1f.png"}, {label:"2층",img:"maps/hall-children-2f.png"} ] },
+  { id:"hall-bio",      name:"생물탐구관",   lat:36.377248, lng:127.377342, radiusIn:26, // N8 돔 ⚠임시값 — ±22m 네트워크 측위(기준 ±12m 미달), 재측정 필요
+    mapImage:"maps/hall-bio-1f.png" },
+  { id:"hall-astro",    name:"천체관",       lat:36.376555, lng:127.375543, radiusIn:26, // N3 벽면 대형 달 ⚠임시값 — ±22m 네트워크 측위(기준 ±12m 미달), 재측정 필요
+    mapImage:"maps/hall-astro.png" },
+];
+
+// 부지 도식(SVG) 좌표계 — 위경도 → viewBox 선형 매핑용 경계.
+// ★ 손으로 추정하지 않고 VENUES 실측 좌표에서 자동 산출한다.
+//   (공식 안내도는 조감도라 북쪽이 위가 아니며, 이를 눈대중으로 옮기면 배치가 뒤틀린다.
+//    좌표가 갱신되면 배경 도식도 자동으로 따라간다.)
+const SITE_BOUNDS = (() => {
+  const VW = 1000;
+  const lats = VENUES.map(v => v.lat), lngs = VENUES.map(v => v.lng);
+  let latMin = Math.min(...lats), latMax = Math.max(...lats);
+  let lngMin = Math.min(...lngs), lngMax = Math.max(...lngs);
+  const dLat = (latMax - latMin) || 0.0015, dLng = (lngMax - lngMin) || 0.0015;
+  latMin -= dLat * 0.25; latMax += dLat * 0.25;   // 가장자리 관이 잘리지 않도록 여백
+  lngMin -= dLng * 0.25; lngMax += dLng * 0.25;
+  // 실제 미터 비율로 세로 크기를 정해 남북/동서 왜곡을 막는다
+  const midLat = (latMin + latMax) / 2;
+  const mLat = (latMax - latMin) * 111132;
+  const mLng = (lngMax - lngMin) * 111320 * Math.cos(midLat * Math.PI / 180);
+  return { lngMin, lngMax, latMin, latMax, VW, VH: Math.round(VW * (mLat / mLng)) };
+})();
+
+/* 지오펜스 히스테리시스 파라미터 (§4.2) */
+const GEO = {
+  OUT_MARGIN: 15,   // R_out = radiusIn + 15m (경계 떨림 방지 댐퍼)
+  DWELL_MS: 3000,   // T = 3초 지속 시 판정
+  // ── 정확도 적응 ──
+  // 실시간 위치 오차가 크면 반경 28m 판정은 의미가 없어진다(±40m면 50m 밖에서도 '진입'으로 보임).
+  // 그래서 정확도가 나쁠수록 진입 반경은 좁히고(오진입 방지) 이탈 반경은 넓힌다(오이탈 방지).
+  ACC_K: 0.5,       // 정확도 1m당 유효반경 보정량
+  MIN_EFF_R: 8,     // 유효 진입반경이 이보다 작아지면 자동 전환을 포기하고 수동 제안으로
+  NEAR_MULT: 1.8,   // 수동 제안을 띄울 근접 범위 (radiusIn 배수)
+};
+
+/* ════════════════════════ 산책로 경로망 ════════════════════════ */
+// 관람객이 실제로 다니는 산책로를 폴리라인으로 등록한다. path.html 로 현장에서 걸으며 기록.
+// 비어 있으면 스냅은 완전히 비활성이고 기존 동작이 그대로 유지된다.
+//   pts   : [[lat,lng], ...] 순서대로 이은 폴리라인 (방향 제약은 걸지 않음 — 산책로는 양방향)
+//   venue : 선택. 관 입구로 이어지는 지선에 달아두면, 이 경로에 스냅될 때 해당 관을
+//           지오펜스 후보로 우선한다. 20m 간격의 인접 관을 '거리'가 아니라 '위상'으로 구분.
+const PATHS = [
+  // 예시(실측 후 교체):
+  // { id:"main", name:"정문 직선로", pts:[[36.37550,127.37650],[36.37562,127.37668]] },
+  // { id:"spur-tech", name:"과학기술관 지선", venue:"hall-tech",
+  //   pts:[[36.37655,127.37455],[36.37669,127.37472]] },
+];
+
+// 스냅 파라미터 — 근거는 docs/superpowers/specs/2026-08-01-path-network-snapping-design.md
+const SNAP = {
+  PATH_ERR: 8,   // 기록된 경로망 자체의 가정 오차(m). 경로도 GPS로 땄으므로 0이 아니다
+  K_TOL:    1.5, // 결합 불확실성의 몇 배까지 '경로 위'로 인정할지
+  SNAP_MAX: 25,  // 절대 상한(m). 아무리 부정확해도 이보다 멀면 스냅하지 않는다
+  MAX_W:    0.8, // 완전 스냅(1.0)을 허용하지 않아 오매칭 피해를 제한
+};
+
+/* 레이더 스케일 2단 고정 (§4.1) */
+const SCALE = { INNER_M: 150, OUTER_M: 600, INNER_FRAC: 0.60 }; // 0~150m→0~60%, 150~600m→60~100%
+
+/* 배경 약도: 현재는 위경도 기반 자체 SVG 도식(SITE_BOUNDS)을 레이더에 정렬해 렌더한다(drawSiteMap).
+   실제 부지 항공 약도 이미지를 배경으로 쓰려면, 두 대각 기준점의 실좌표+이미지 픽셀좌표를
+   확보해 아래 SITE_MAP 방식으로 확장하면 된다(§7). 현재는 미사용(null). */
+const SITE_MAP = null;
+
+/* ════════════════════════ 지오 유틸 ════════════════════════ */
+const R_EARTH = 6371000, D2R = Math.PI/180, R2D = 180/Math.PI;
+function haversine(a, b){
+  const dlat=(b.lat-a.lat)*D2R, dlng=(b.lng-a.lng)*D2R;
+  const la1=a.lat*D2R, la2=b.lat*D2R;
+  const h=Math.sin(dlat/2)**2 + Math.cos(la1)*Math.cos(la2)*Math.sin(dlng/2)**2;
+  return 2*R_EARTH*Math.asin(Math.min(1,Math.sqrt(h)));
+}
+function bearing(a, b){ // 0=북, 시계방향(도)
+  const la1=a.lat*D2R, la2=b.lat*D2R, dlng=(b.lng-a.lng)*D2R;
+  const y=Math.sin(dlng)*Math.cos(la2);
+  const x=Math.cos(la1)*Math.sin(la2)-Math.sin(la1)*Math.cos(la2)*Math.cos(dlng);
+  return (Math.atan2(y,x)*R2D+360)%360;
+}
+/* 실거리(m) → 레이더 정규화 반경(0~1) : 2단 스케일 */
+function distToNorm(d){
+  if(d<=SCALE.INNER_M) return (d/SCALE.INNER_M)*SCALE.INNER_FRAC;
+  if(d>=SCALE.OUTER_M) return 1;
+  return SCALE.INNER_FRAC + (d-SCALE.INNER_M)/(SCALE.OUTER_M-SCALE.INNER_M)*(1-SCALE.INNER_FRAC);
+}
+/* 위경도 → 부지 도식 좌표(px). 위=북(latMax가 y=0) 선형 매핑. */
+function latlngToSite(lat,lng){
+  const b=SITE_BOUNDS;
+  return { x:(lng-b.lngMin)/(b.lngMax-b.lngMin)*b.VW,
+           y:(b.latMax-lat)/(b.latMax-b.latMin)*b.VH };
+}
+
+/* ──────────────────────────────────────────────────────────────
+   경로망 스냅 (순수 함수)
+   위경도를 기준점 기준 로컬 미터 평면으로 옮겨 평면기하로 계산한다.
+   수백 m 범위에서는 등장방형 근사로 충분하다.
+   ────────────────────────────────────────────────────────────── */
+function toLocalM(p, ref){
+  return { x:(p.lng-ref.lng)*111320*Math.cos(ref.lat*D2R),
+           y:(p.lat-ref.lat)*111132 };
+}
+function fromLocalM(v, ref){
+  return { lat: ref.lat + v.y/111132,
+           lng: ref.lng + v.x/(111320*Math.cos(ref.lat*D2R)) };
+}
+// 점 p 에서 선분 ab 위의 최근접점. 수선의 발이 선분 밖이면 가까운 끝점을 준다.
+function closestOnSeg(p, a, b){
+  const vx=b.x-a.x, vy=b.y-a.y, L2=vx*vx+vy*vy;
+  if(L2===0) return { x:a.x, y:a.y, t:0 };
+  let t=((p.x-a.x)*vx + (p.y-a.y)*vy)/L2;
+  t=Math.max(0, Math.min(1, t));
+  return { x:a.x+t*vx, y:a.y+t*vy, t };
+}
+// 현재 위치를 등록된 산책로 위로 끌어온다. 조건 미달이면 null(원위치 유지).
+function snapToPaths(fix, acc, paths){
+  const list = paths || PATHS;
+  if(!Array.isArray(list) || !list.length) return null;
+  const ref = fix, p = { x:0, y:0 };   // fix 자신이 기준이므로 원점
+  let best = null;
+  for(const path of list){
+    const pts = path.pts;
+    if(!Array.isArray(pts) || pts.length < 2) continue;   // 점 2개 미만은 무시
+    for(let i=0; i<pts.length-1; i++){
+      const a = toLocalM({lat:pts[i][0],   lng:pts[i][1]},   ref);
+      const b = toLocalM({lat:pts[i+1][0], lng:pts[i+1][1]}, ref);
+      const c = closestOnSeg(p, a, b);
+      const d = Math.hypot(c.x, c.y);
+      // 좌표가 빠졌거나 숫자가 아닌 점(손으로 붙여넣은 PATHS 의 현실적 오타)은 건너뛴다.
+      // NaN 을 그냥 두면 best 가 NaN 으로 굳는다 — 이후 `d < best.dist` 도 `best.dist > tol`
+      // 도 전부 false 라 걸러지지 않고, POS() 가 {NaN,NaN} 이 되어 마커·거리·지오펜스가
+      // 아무 신호 없이 통째로 죽는다.
+      if(!Number.isFinite(d)) continue;
+      if(!best || d < best.dist) best = { dist:d, pt:c, path };
+    }
+  }
+  if(!best || !Number.isFinite(best.dist)) return null;   // 최후 방어선
+  // 허용 거리: 현재 정확도와 경로망 오차의 결합. 경로도 오차를 안고 있으므로
+  // 현재 정확도만으로 판단하면 실제로 경로 위에 있는데도 스냅을 놓친다.
+  const tol = Math.min(SNAP.K_TOL*Math.hypot(acc, SNAP.PATH_ERR), SNAP.SNAP_MAX);
+  if(best.dist > tol) return null;
+  // 가중 보간 — 정확도가 나쁠수록 경로를 더 신뢰한다. 완전 스냅은 하지 않는다.
+  const w = Math.min(SNAP.MAX_W, acc/(acc + SNAP.PATH_ERR));
+  const moved = fromLocalM({ x:best.pt.x*w, y:best.pt.y*w }, ref);
+  return { lat:moved.lat, lng:moved.lng, pathId:best.path.id,
+           venue:best.path.venue || null, dist:best.dist, w };
+}
+
+// 테스트 seam — 순수 함수와 상태를 외부에서 검증하기 위해 노출한다. 앱 동작에는 영향이 없다.
+window.__gnssnavi = {
+  snapToPaths, closestOnSeg, toLocalM, fromLocalM, SNAP,
+  getState: () => state,
+  POS: () => POS(),
+  pickCandidate: (c) => pickCandidate(c),
+  setPaths: (arr) => { PATHS.length = 0; PATHS.push(...arr); },
+};
+
+/* ════════════════════════ 상태 ════════════════════════ */
+const state = {
+  fix:null,           // {lat,lng,acc}  스무딩된 현재 위치
+  rawFix:null,        // 마지막 원시 fix
+  heading:0,           // 적용된 화면 회전각(도). North-up=0
+  headingMode:'north', // 방향 소스: 'north'|'compass'|'course'|'manual'
+  headingOn:false,     // 나침반 이벤트 리스닝(권한 확보) 여부
+  headingValid:false,  // 나침반 최근 값 유효?
+  compassHeading:0,    // 나침반 방위
+  courseHeading:null,  // GPS 진행방향(course over ground)
+  manualHeading:0,     // 손가락 회전 보정각
+  _courseRef:null,     // 진행방향 계산용 직전 위치
+  sim:false,           // 시뮬레이션 모드
+  bgOn:false,          // 배경 부지 약도 표시
+  snap:null,           // 최근 스냅 결과 {lat,lng,pathId,venue,dist,w} | null
+  snapOn:true,         // 경로망 스냅 사용 여부(검증 토글)
+  indoor:null,         // 현재 실내로 판정된 venue
+  t0:performance.now()
+};
+// 지오펜스 타이머: venueId -> {inside:bool, sinceIn:ts|null, sinceOut:ts|null}
+const geoTimers = new Map(VENUES.map(v => [v.id, {inside:false, sinceIn:null, sinceOut:null}]));
+
+/* ════════════════════════ 캔버스 ════════════════════════ */
+const cv = document.getElementById("radar"), ctx = cv.getContext("2d");
+let W=0,H=0,CX=0,CY=0,RR=0,DPR=1;
+function resize(){
+  DPR = Math.min(window.devicePixelRatio||1, 2.5);
+  W = window.innerWidth; H = window.innerHeight;
+  cv.width = W*DPR; cv.height = H*DPR; cv.style.width=W+"px"; cv.style.height=H+"px";
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  CX = W/2; CY = H/2;
+  RR = Math.min(W,H)/2 - 24; // 레이더 최대 반경(px)
+}
+window.addEventListener("resize", resize); resize();
+
+/* ════════════════════════ 렌더 ════════════════════════ */
+const RING_M = [150,300,450,600];
+function draw(now){
+  const t = (now - state.t0)/1000;
+  ctx.clearRect(0,0,W,H);
+
+  // 배경 약도 (내부 선형존 정렬, 선택)
+  drawSiteMap();
+
+  // 레이더 판
+  ctx.save();
+  ctx.translate(CX,CY);
+
+  // 바깥 글로우
+  const g = ctx.createRadialGradient(0,0,RR*0.1,0,0,RR);
+  g.addColorStop(0,"rgba(10,60,40,.25)"); g.addColorStop(1,"rgba(2,16,12,0)");
+  ctx.fillStyle=g; ctx.beginPath(); ctx.arc(0,0,RR,0,7); ctx.fill();
+
+  // 동심원 링 (실거리 → 스케일 반경)
+  ctx.lineWidth=1;
+  for(const m of RING_M){
+    const r = distToNorm(m)*RR;
+    ctx.strokeStyle = m===SCALE.INNER_M ? "rgba(46,255,166,.35)" : "rgba(22,180,107,.22)";
+    ctx.beginPath(); ctx.arc(0,0,r,0,7); ctx.stroke();
+    // 거리 눈금은 45° 방향(마커 밀집 축인 상단 회피)에 표기
+    ctx.fillStyle="rgba(79,138,112,.85)"; ctx.font="10px ui-monospace,monospace";
+    ctx.fillText(m+"m", r*0.707+2, -r*0.707);
+  }
+  // 내부/외부 경계 강조는 150m 링이 담당
+
+  // 방위 눈금 + N/E/S/W (화면 회전 반영)
+  ctx.strokeStyle="rgba(22,180,107,.18)";
+  for(let deg=0; deg<360; deg+=30){
+    const a=(deg - state.heading)*D2R;
+    const x1=Math.sin(a), y1=-Math.cos(a);
+    ctx.beginPath(); ctx.moveTo(x1*RR*0.14,y1*RR*0.14); ctx.lineTo(x1*RR,y1*RR); ctx.stroke();
+  }
+  const cardinals=[["N",0],["E",90],["S",180],["W",270]];
+  ctx.font="bold 12px -apple-system,sans-serif"; ctx.textAlign="center"; ctx.textBaseline="middle";
+  for(const [lab,deg] of cardinals){
+    const a=(deg - state.heading)*D2R, x=Math.sin(a)*(RR-2), y=-Math.cos(a)*(RR-2);
+    ctx.fillStyle = lab==="N" ? "#ff5d6c" : "rgba(120,180,150,.95)";
+    ctx.fillText(lab, x, y);
+  }
+  ctx.textAlign="start"; ctx.textBaseline="alphabetic";
+
+  // 스캔 라인 (시각효과, 데이터 무관)
+  const scanA = (t*0.9)%(Math.PI*2);
+  ctx.save(); ctx.rotate(scanA);
+  const lg = ctx.createLinearGradient(0,0,RR,0);
+  lg.addColorStop(0,"rgba(46,255,166,.0)"); lg.addColorStop(1,"rgba(46,255,166,.28)");
+  ctx.fillStyle=lg; ctx.beginPath(); ctx.moveTo(0,0);
+  ctx.arc(0,0,RR,-0.32,0.02); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle="rgba(46,255,166,.55)"; ctx.lineWidth=1.5;
+  ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(RR,0); ctx.stroke();
+  ctx.restore();
+
+  // 중심(현재 위치) 도트
+  ctx.fillStyle="#eaffff"; ctx.beginPath(); ctx.arc(0,0,4,0,7); ctx.fill();
+  ctx.strokeStyle="rgba(46,255,166,.6)"; ctx.beginPath(); ctx.arc(0,0,7,0,7); ctx.stroke();
+
+  // 마커
+  if(state.fix){
+    for(const v of VENUES){
+      const d = haversine(POS(), v);
+      const brg = bearing(POS(), v);
+      const rnorm = distToNorm(d);
+      const clamped = rnorm>=1;
+      const r = Math.min(rnorm,1)*RR;
+      const a = (brg - state.heading)*D2R;
+      const x = Math.sin(a)*r, y = -Math.cos(a)*r;
+      const blink = 0.55 + 0.45*Math.sin(t*3 + v.lat*97);
+
+      // 도트
+      ctx.beginPath(); ctx.arc(x,y, clamped?4:6, 0,7);
+      ctx.fillStyle = `rgba(46,255,166,${blink})`;
+      ctx.shadowColor="rgba(46,255,166,.9)"; ctx.shadowBlur=clamped?4:10;
+      ctx.fill(); ctx.shadowBlur=0;
+      if(clamped){ // 600m 밖: 방향 화살표 느낌으로 테두리
+        ctx.strokeStyle="rgba(46,255,166,.5)"; ctx.beginPath(); ctx.arc(x,y,7,0,7); ctx.stroke();
+      }
+      // 라벨
+      const label = `${v.name} ${d<1000? d.toFixed(0)+"m" : (d/1000).toFixed(2)+"km"}`;
+      ctx.font="11px -apple-system,sans-serif";
+      const tw = ctx.measureText(label).width;
+      let lx = x+9, ly = y+4;
+      if(lx+tw > RR){ lx = x-9-tw; }        // 우측 넘치면 좌측
+      ly = Math.max(-RR+10, Math.min(RR-4, ly));
+      ctx.fillStyle="rgba(2,16,12,.7)"; ctx.fillRect(lx-3, ly-11, tw+6, 15);
+      ctx.fillStyle="#c9ffe6"; ctx.fillText(label, lx, ly);
+    }
+  }
+
+  ctx.restore();
+  requestAnimationFrame(draw);
+}
+
+// 배경 부지 도식(위경도 기반 SVG)을 레이더 좌표계에 정렬해 반투명으로 렌더.
+// 마커와 동일한 회전/스케일 규약을 쓰므로 마커·건물 블록이 정확히 겹친다.
+// 주의: 레이더 반경은 2단(비선형)이지만 배경은 내부 150m 선형존 스케일로만 투영한다.
+//       → 부지 중심 근처(≈150m 이내)에서 정렬이 정확하고, 외곽은 압축존과 어긋난다(의도된 한계).
+let siteBgImg=null, siteBgReady=false;
+function initSiteBg(){
+  siteBgImg=new Image();
+  siteBgImg.onload=()=>{ siteBgReady=true; };
+  siteBgImg.src="data:image/svg+xml;charset=utf-8,"+encodeURIComponent(buildSiteMapSVG(null, true));
+}
+function drawSiteMap(){
+  if(!state.bgOn || !siteBgReady || !state.fix) return;
+  const b=SITE_BOUNDS;
+  const P=POS(); const su=latlngToSite(P.lat, P.lng);        // 사용자 위치의 도식 px
+  const mx=(b.lngMax-b.lngMin)*metersPerDegLng(P.lat)/b.VW; // m/도식x-px
+  const my=(b.latMax-b.latMin)*metersPerDegLat()/b.VH;             // m/도식y-px
+  const s=SCALE.INNER_FRAC*RR/SCALE.INNER_M;                        // px/m (선형존)
+  const hd=state.heading*D2R, cos=Math.cos(hd), sin=Math.sin(hd);
+  const a=s*mx*cos, c=s*my*sin, bb=-s*mx*sin, d=s*my*cos;          // 도식px→화면 affine
+  const e=CX - a*su.x - c*su.y, f=CY - bb*su.x - d*su.y;
+  ctx.save();
+  ctx.beginPath(); ctx.arc(CX,CY,RR,0,7); ctx.clip();              // 레이더 원판 안으로만
+  ctx.globalAlpha=0.55;
+  ctx.setTransform(a*DPR, bb*DPR, c*DPR, d*DPR, e*DPR, f*DPR);
+  ctx.drawImage(siteBgImg, 0, 0);
+  ctx.restore();
+}
+
+/* ════════════════════════ 방향(heading) 소스 관리 ════════════════════════ */
+// 모드별로 적용 회전각 결정. North-up=0 기본. 나침반이 부정확해도 course/manual로 대체.
+function updateHeading(){
+  let h;
+  switch(state.headingMode){
+    case 'compass': h = state.headingValid ? state.compassHeading : 0; break; // 값 없으면 North-up
+    case 'course':  h = state.courseHeading!=null ? state.courseHeading : 0; break;
+    case 'manual':  h = state.manualHeading; break;
+    default:        h = 0; // north
+  }
+  state.heading = h;
+  updateStatus();
+}
+function headingLabel(){
+  switch(state.headingMode){
+    case 'compass': return state.headingValid ? '🧭 나침반' : '🧭 대기(N↑)';
+    case 'course':  return state.courseHeading!=null ? `🚶 진행 ${Math.round(state.courseHeading)}°` : '🚶 걸으면 정렬';
+    case 'manual':  return `🔄 수동 ${Math.round(state.manualHeading)}°`;
+    default:        return 'N↑';
+  }
+}
+
+/* ════════════════════════ 위치 스무딩 ════════════════════════ */
+// 판정·렌더링에 쓸 위치. 스냅이 유효하면 스냅 위치, 아니면 평활화된 원시 위치.
+// 좌표 readout(legend)은 이 함수를 쓰지 않는다 — 측정값에 보정을 섞지 않기 위함.
+function POS(){
+  if(state.snapOn && state.snap) return { lat:state.snap.lat, lng:state.snap.lng, acc:state.fix.acc };
+  return state.fix;
+}
+// state.fix 를 바꾼 곳은 반드시 이걸 부른다. POS() 는 state.snap 이 있으면 그쪽을
+// 쓰므로, 스냅을 갱신하지 않고 fix 만 옮기면 화면이 옛 스냅 좌표에 얼어붙는다.
+function refreshSnap(){
+  state.snap = state.snapOn && state.fix ? snapToPaths(state.fix, state.fix.acc) : null;
+}
+function applyFix(lat,lng,acc,speed=null,crs=null){
+  state.rawFix={lat,lng,acc};
+  if(!state.fix){ state.fix={lat,lng,acc}; }
+  else{
+    // 지수 이동평균으로 보간 — 튐 완화 (정확도 나쁠수록 더 천천히)
+    const k = acc>25 ? 0.15 : acc>12 ? 0.30 : 0.5;
+    state.fix.lat += (lat-state.fix.lat)*k;
+    state.fix.lng += (lng-state.fix.lng)*k;
+    state.fix.acc = acc;
+  }
+  // 산책로 경로망 스냅 — 조건 미달이면 null 이라 원위치가 유지된다
+  refreshSnap();
+  // GPS 진행방향(course over ground): 기기가 heading을 주면 사용, 아니면 원시 위치 이력으로 계산.
+  // 정지 상태(느린 속도/짧은 이동)에서는 갱신하지 않아 마지막 진행방향을 유지한다.
+  const here={lat,lng};
+  if(crs!=null && !isNaN(crs) && speed!=null && speed>0.7){
+    state.courseHeading = crs; state._courseRef = here;
+  } else {
+    const ref=state._courseRef;
+    if(ref){ if(haversine(ref,here) >= 6){ state.courseHeading = bearing(ref,here); state._courseRef = here; } }
+    else state._courseRef = here;
+  }
+  if(state.headingMode==='course') updateHeading();
+  updateStatus();
+  evalGeofence();
+}
+
+/* ════════════════════════ 지오펜스 + 히스테리시스 ════════════════════════ */
+// dwell(T초 지속) 판정은 위치 이벤트와 무관하게 주기적으로 돌려야 한다.
+// (관 안에 정지해 있으면 watchPosition 콜백이 안 와서 진입 판정이 누락됨)
+setInterval(()=>{ if(state.fix) evalGeofence(); }, 500);
+
+// 반경 조건을 만족한 관이 여럿일 때 하나를 고른다.
+// 입구가 20m 간격으로 붙어 있으면 반경 판정만으로는 구분이 안 되므로
+// ① 스냅된 지선의 관 → ② 진행방향과 가장 잘 맞는 관 → ③ 최근접 순으로 좁힌다.
+// (이 함수가 없으면 VENUES 배열 순서로 결정되어 사실상 임의값이 된다)
+function pickCandidate(cands){
+  if(!cands || !cands.length) return null;
+  if(cands.length === 1) return cands[0];
+  // ① 지선 스냅
+  const sv = state.snap && state.snap.venue;
+  if(sv){ const hit = cands.find(c => c.v.id === sv); if(hit) return hit; }
+  // ② 진행방향 정합 — 마주보는 문은 180° 차이라 판정 여유가 크다
+  const hd = state.courseHeading;
+  if(hd != null){
+    let best = null;
+    for(const c of cands){
+      const align = Math.cos((bearing(POS(), c.v) - hd)*D2R);   // 1=정확히 그쪽
+      if(!best || align > best.align) best = { c, align };
+    }
+    if(best) return best.c;
+  }
+  // ③ 최근접
+  return cands.slice().sort((a,b) => a.d - b.d)[0];
+}
+
+function evalGeofence(){
+  if(!state.fix) return;
+  const now = performance.now();
+  const acc = state.fix.acc ?? 0;
+  let suggest = null;   // 자동 전환은 못 하지만 가까운 관(수동 제안 후보)
+  const ready = [];     // dwell 을 채운 진입 후보들
+  // 이탈 유효반경. 루프 안(이탈 판정)과 루프 뒤(계속 겨루기 판정) 두 곳에서 쓰이므로
+  // 한 곳에만 둔다 — 식이 갈라지면 두 판정이 조용히 어긋나 추적이 매우 어려워진다.
+  const rOut = v => v.radiusIn + GEO.OUT_MARGIN + GEO.ACC_K * acc;
+
+  for(const v of VENUES){
+    const st = geoTimers.get(v.id);
+    const d = haversine(POS(), v);
+    // 정확도 적응 반경
+    const rInEff  = v.radiusIn - GEO.ACC_K * acc;
+    const rOutEff = rOut(v);
+    const reliable = rInEff >= GEO.MIN_EFF_R;   // 자동 전환을 신뢰할 수 있는 정확도인가
+
+    if(!st.inside){
+      if(reliable && d < rInEff){
+        st.sinceIn = st.sinceIn ?? now; st.sinceOut = null;
+        // 진입 조건을 만족한 관은 후보로만 모으고, 실제 진입은 루프 뒤에서 하나만 시킨다
+        if(now - st.sinceIn >= GEO.DWELL_MS) ready.push({ v, d, st });
+      } else {
+        st.sinceIn = null;
+        // 정확도가 나빠 자동 전환은 못 하지만 근처인 경우 → 사용자가 직접 열도록 제안
+        if(!reliable && d < v.radiusIn * GEO.NEAR_MULT && (!suggest || d < suggest.d)) suggest = { v, d };
+      }
+    } else {
+      if(d > rOutEff){
+        st.sinceOut = st.sinceOut ?? now; st.sinceIn = null;
+        if(now - st.sinceOut >= GEO.DWELL_MS){
+          st.inside = false; st.sinceOut = null;
+          if(state.indoor && state.indoor.id === v.id) exitIndoor(v);
+        }
+      } else st.sinceOut = null;
+    }
+  }
+  // 진입 후보가 여럿이면 하나만 고른다(배열 순서로 결정되지 않게).
+  // 이미 표시 중인 관이 아직 이탈하지 않았다면 그것도 후보에 넣어 함께 비교한다.
+  // 그러지 않으면 겹친 구역에서 판별에 진 관이 혼자 dwell 을 다시 채워
+  // 단일 후보로 들어와 스냅·방향 우선순위를 건너뛰고 화면을 덮어쓴다(정지 상태 오전환).
+  if(ready.length){
+    const cands = ready.slice();
+    if(state.indoor){
+      const cur = VENUES.find(v => v.id === state.indoor.id);
+      const curSt = cur && geoTimers.get(cur.id);
+      if(cur && curSt && curSt.inside && !cands.some(c => c.v.id === cur.id)){
+        const dCur = haversine(POS(), cur);
+        // 이탈 조건을 아직 넘지 않았을 때만 계속 겨루게 한다
+        if(dCur <= rOut(cur)) cands.push({ v:cur, d:dCur, st:curSt });
+      }
+    }
+    const win = pickCandidate(cands);
+    if(win){
+      win.st.inside = true; win.st.sinceIn = null;
+      // 이미 표시 중인 관이 그대로 이겼으면 화면을 다시 그리지 않는다
+      if(!state.indoor || state.indoor.id !== win.v.id) enterIndoor(win.v);
+    }
+    // 진 후보들의 dwell 타이머는 되돌린다(다음 기회에 다시 겨룬다).
+    // 자리를 내준 이전 관은 inside 도 함께 내린다 — 그러지 않으면 그 관은 영원히
+    // 이탈 분기에만 머물러 ready(!st.inside 에서만 채워짐)에 다시 못 들어오고,
+    // 두 관이 동시에 inside 인 순간부터 후보가 영구히 비어 표시가 굳어버린다.
+    // 풀어준 관은 다시 dwell 을 채워 단독 후보로 돌아오지만, 위의 '현재 관 주입'이
+    // 그때 현재 승자를 후보에 다시 넣으므로 판별은 여전히 둘을 놓고 겨룬다.
+    for(const c of cands) if(c !== win){
+      c.st.sinceIn = null;
+      if(win && c.st.inside && c.v.id !== win.v.id){ c.st.inside = false; c.st.sinceOut = null; }
+    }
+  }
+  updateNearSuggest(state.indoor ? null : suggest);
+}
+
+// 근처지만 위치가 부정확할 때 뜨는 수동 약도 버튼
+function updateNearSuggest(s){
+  const btn = document.getElementById("nearBtn");
+  if(!s){ btn.classList.add("hidden"); btn.__venue = null; return; }
+  btn.__venue = s.v;
+  btn.textContent = `🏛 ${s.v.name} 약도 보기 (위치 부정확)`;
+  btn.classList.remove("hidden");
+}
+document.getElementById("nearBtn").onclick = function(){
+  if(this.__venue) enterIndoor(this.__venue);   // 수동 진입(지오펜스 상태는 건드리지 않음)
+};
+function enterIndoor(v){
+  state.indoor=v;
+  document.getElementById("indoorName").textContent=v.name;
+  const tabs=document.getElementById("floorTabs"), holder=document.getElementById("indoorMap");
+  tabs.innerHTML=""; holder.innerHTML="";
+  // 약도 소스 정규화: floors[] > mapImage(단일) > 없음(자체 도식)
+  const floors = (Array.isArray(v.floors) && v.floors.length) ? v.floors
+               : v.mapImage ? [{ label:"", img:v.mapImage }]
+               : null;
+  if(!floors){ holder.innerHTML=buildSiteMapSVG(v.id); document.getElementById("indoor").classList.add("show"); return; }
+  // 층이 2개 이상이거나 라벨이 있으면 층 선택 탭 표시 (실내는 측위 없음 → 수동 전환)
+  if(floors.length>1 || floors[0].label){
+    floors.forEach((f,i)=>{
+      const b=document.createElement("button");
+      b.textContent=f.label || ("층 "+(i+1));
+      b.onclick=()=>showFloor(v, floors, i);
+      tabs.appendChild(b);
+    });
+  }
+  // 기본 표시 층: main:true 지정층(보통 입구층), 없으면 첫 층
+  const start = Math.max(0, floors.findIndex(f=>f.main));
+  showFloor(v, floors, start);
+  document.getElementById("indoor").classList.add("show");
+}
+function showFloor(v, floors, idx){
+  const tabs=document.getElementById("floorTabs"), holder=document.getElementById("indoorMap");
+  [...tabs.children].forEach((b,i)=>b.classList.toggle("on", i===idx));
+  const f=floors[idx]; holder.innerHTML="";
+  const img=new Image(); img.src=f.img; img.alt=v.name+(f.label?" "+f.label:"")+" 약도";
+  img.onerror=()=>{ holder.innerHTML=phFloor(v,f); }; // 이미지 없으면 준비 중 안내
+  holder.appendChild(img);
+}
+const phFloor=(v,f)=>`<div class="imapph"><div style="line-height:1.7">`
+  +`<b>${svgEsc(v.name)}${f.label?" · "+svgEsc(f.label):""}</b> 약도 준비 중<br>`
+  +`<span style="opacity:.55;font-size:11px">${svgEsc(f.img)}</span><br><br>`
+  +`상세 약도 이미지를 <b>maps/</b> 에 넣으면 이 자리에 표시됩니다.`
+  +`</div></div>`;
+function exitIndoor(){
+  state.indoor=null;
+  document.getElementById("indoor").classList.remove("show");
+}
+document.getElementById("indoorClose").onclick=()=>{ // 수동으로 레이더 복귀(추적은 계속)
+  document.getElementById("indoor").classList.remove("show");
+};
+
+/* ────────────────────────────────────────────────────────────
+   자체 부지 도식(SVG). 공식 안내도의 배치를 참조해 픽셀 재현(§9-4 허용).
+   실내 진입 시 highlightId 관을 강조해 전체화면 약도로 표시.
+   관별 상세 약도(maps/*.png)가 준비되면 VENUES[].mapImage 로 자동 대체됨.
+   ──────────────────────────────────────────────────────────── */
+// 비강조 시설(사이언스홀·우주과학공원 등)은 실측 좌표가 없어 비워둔다.
+// 추정 좌표로 그리면 실제 배치와 어긋나 오히려 오해를 부르므로, 실측되면 추가할 것.
+// 형식: { name, lat, lng, w, h, dome? }
+const SITE_DECOR = [];
+function svgEsc(s){ return String(s).replace(/[<>&]/g, c=>({"<":"&lt;",">":"&gt;","&":"&amp;"}[c])); }
+
+// bg=true 이면 레이더 배경용(투명 바탕, 핀 없음, 옅은 톤). false 이면 실내 진입 약도용.
+function buildSiteMapSVG(highlightId, bg=false){
+  const b=SITE_BOUNDS;
+  const blocks=[];
+
+  // 하천·광장 등 지형지물은 실측 기준점이 없어 그리지 않는다(추정 배치는 오해를 부름).
+  // 대신 100m 격자를 깔아 거리 감각을 준다.
+  {
+    const midLat=(b.latMin+b.latMax)/2;
+    const pxPer100mX = 100/((b.lngMax-b.lngMin)*111320*Math.cos(midLat*Math.PI/180))*b.VW;
+    const pxPer100mY = 100/((b.latMax-b.latMin)*111132)*b.VH;
+    for(let x=pxPer100mX; x<b.VW; x+=pxPer100mX)
+      blocks.push(`<line x1="${x}" y1="0" x2="${x}" y2="${b.VH}" stroke="#0f3d2c" stroke-width="1"/>`);
+    for(let y=pxPer100mY; y<b.VH; y+=pxPer100mY)
+      blocks.push(`<line x1="0" y1="${y}" x2="${b.VW}" y2="${y}" stroke="#0f3d2c" stroke-width="1"/>`);
+    if(!bg) blocks.push(`<text x="8" y="${b.VH-8}" fill="#2c6b52" font-size="14">격자 100m</text>`);
+  }
+
+  // 비강조 시설(컨텍스트)
+  for(const d of SITE_DECOR){
+    const p=latlngToSite(d.lat,d.lng), w=d.w||90, h=d.h||60;
+    if(d.dome) blocks.push(`<ellipse cx="${p.x}" cy="${p.y}" rx="${w/2}" ry="${h/2}" fill="#0c2c22" stroke="#1c5a41"/>`);
+    else blocks.push(`<rect x="${p.x-w/2}" y="${p.y-h/2}" width="${w}" height="${h}" rx="8" fill="#0c2c22" stroke="#1c5a41"/>`);
+    blocks.push(`<text x="${p.x}" y="${p.y+5}" fill="${bg?'#2c6b52':'#3f8a6f'}" font-size="15" text-anchor="middle">${svgEsc(d.name)}</text>`);
+  }
+
+  // 전시관(7개)
+  for(const v of VENUES){
+    const p=latlngToSite(v.lat,v.lng), hot=v.id===highlightId;
+    const dome=v.id==="hall-bio", w=110, h=72;
+    const fill=hot?"#0f5c3f":(bg?"#0d3527":"#123a2b"), stroke=hot?"#2effa6":(bg?"#1f7a54":"#1f6b4c"), sw=hot?3:1.4;
+    const glow=hot?` filter="url(#g)"`:``;
+    if(dome) blocks.push(`<ellipse cx="${p.x}" cy="${p.y}" rx="${w/2}" ry="${h/2}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"${glow}/>`);
+    else blocks.push(`<rect x="${p.x-w/2}" y="${p.y-h/2}" width="${w}" height="${h}" rx="10" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"${glow}/>`);
+    blocks.push(`<text x="${p.x}" y="${p.y+6}" fill="${hot?'#eaffff':(bg?'#6fbf9b':'#8fd9bb')}" font-size="${hot?19:16}" font-weight="${hot?700:600}" text-anchor="middle">${svgEsc(v.name)}</text>`);
+    if(hot && !bg){ // 현재 위치 핀 (실내 약도에서만)
+      blocks.push(`<circle cx="${p.x}" cy="${p.y-h/2-16}" r="9" fill="#2effa6"${glow}/>`);
+      blocks.push(`<path d="M${p.x-7},${p.y-h/2-12} L${p.x+7},${p.y-h/2-12} L${p.x},${p.y-h/2} Z" fill="#2effa6"/>`);
+      blocks.push(`<text x="${p.x}" y="${p.y-h/2-30}" fill="#2effa6" font-size="15" font-weight="700" text-anchor="middle">현재 위치</text>`);
+    }
+  }
+
+  const arrow = bg ? `` : `<g transform="translate(${b.VW-60},46)"><line x1="0" y1="26" x2="0" y2="-6" stroke="#ff5d6c" stroke-width="2"/>
+      <path d="M-5,2 L5,2 L0,-8 Z" fill="#ff5d6c"/><text x="0" y="42" fill="#ff5d6c" font-size="14" text-anchor="middle" font-family="sans-serif">N</text></g>`;
+  return `<svg viewBox="0 0 ${b.VW} ${b.VH}" xmlns="http://www.w3.org/2000/svg"
+    style="width:100%;height:auto;max-height:100%;${bg?'':'background:#04140e;'}border-radius:10px" role="img" aria-label="부지 약도">
+    <defs><filter id="g" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter></defs>
+    <g font-family="-apple-system,sans-serif">${blocks.join("")}</g>${arrow}
+  </svg>`;
+}
+
+/* ════════════════════════ 상태표시 ════════════════════════ */
+function updateStatus(){
+  const s=document.getElementById("status"), p=document.getElementById("fixPill");
+  if(!state.fix){ s.textContent="위치 확보 중…"; return; }
+  const acc=state.fix.acc;
+  const near=[...VENUES].map(v=>({v,d:haversine(POS(),v)})).sort((a,b)=>a.d-b.d)[0];
+  s.innerHTML=`가장 가까운 곳: <b>${near.v.name}</b> · ${near.d<1000?near.d.toFixed(0)+"m":(near.d/1000).toFixed(2)+"km"}`
+    + (state.sim?` · <b style="color:var(--warn)">SIM</b>`:``)
+    + ` · ${headingLabel()}`;
+  p.textContent=`GPS ±${acc.toFixed(0)}m`;
+  p.className="pill "+(acc<=10?"good":acc<=25?"mid":"bad");
+  // 배경 약도 켜면 좌표 확인용으로 현재 GPS 좌표 표시(탭 복사)
+  const lg=document.getElementById("legend");
+  if(state.bgOn){
+    lg.innerHTML=`📍 <b>${state.fix.lat.toFixed(6)}, ${state.fix.lng.toFixed(6)}</b> ±${acc.toFixed(0)}m <span style="opacity:.55">· 탭하면 복사</span>`;
+  } else {
+    lg.innerHTML=`링: <b>150m</b> / <b>300m</b> / <b>450m</b> / <b>600m</b>`;
+  }
+}
+
+/* ════════════════════════ Geolocation ════════════════════════ */
+let watchId=null;
+function startWatch(){
+  if(!("geolocation" in navigator)){ toast("Geolocation 미지원 브라우저"); return; }
+  watchId=navigator.geolocation.watchPosition(
+    pos=>{ if(state.sim) return; applyFix(pos.coords.latitude,pos.coords.longitude,pos.coords.accuracy,pos.coords.speed,pos.coords.heading); },
+    err=>{ toast("위치 오류: "+err.message); },
+    { enableHighAccuracy:true, maximumAge:1000, timeout:20000 }
+  );
+}
+
+/* ════════════════════════ 나침반 (§4.4) ════════════════════════ */
+let headingBuf=[], lastHeadingTs=0;
+function onOrient(e){
+  let hd=null;
+  if(typeof e.webkitCompassHeading==="number") hd=e.webkitCompassHeading;      // iOS: 이미 북 기준 시계방향
+  else if(e.absolute && typeof e.alpha==="number") hd=(360-e.alpha)%360;        // Android absolute
+  if(hd==null || isNaN(hd)){ state.headingValid=false; return; }
+  lastHeadingTs=performance.now();
+  // 스무딩 + 튐 감지: 원형 평균
+  headingBuf.push(hd); if(headingBuf.length>5) headingBuf.shift();
+  let sx=0,sy=0; for(const h of headingBuf){ sx+=Math.cos(h*D2R); sy+=Math.sin(h*D2R); }
+  const avg=(Math.atan2(sy,sx)*R2D+360)%360;
+  state.compassHeading = avg; state.headingValid = true;
+  if(state.headingMode==='compass') updateHeading();
+}
+// 값 끊김 감시 → compass 모드면 North-up 폴백
+setInterval(()=>{ if(state.headingOn && performance.now()-lastHeadingTs>2500){
+  state.headingValid=false; if(state.headingMode==='compass') updateHeading(); } },1000);
+
+async function enableCompass(){
+  try{
+    if(typeof DeviceOrientationEvent!=="undefined" && typeof DeviceOrientationEvent.requestPermission==="function"){
+      const res=await DeviceOrientationEvent.requestPermission(); // iOS: 반드시 탭 제스처 내
+      if(res!=="granted"){ toast("나침반 권한 거부 — North-up 유지"); return false; }
+    }
+    window.addEventListener("deviceorientationabsolute", onOrient, true);
+    window.addEventListener("deviceorientation", onOrient, true);
+    state.headingOn=true;
+    return true;
+  }catch(err){ toast("나침반 사용 불가 — North-up 유지"); return false; }
+}
+
+/* ── 방향 모드 전환 ── */
+const compassBtn=document.getElementById("compassBtn"),
+      courseBtn=document.getElementById("courseBtn");
+function setHeadingButtons(){
+  compassBtn.classList.toggle("on", state.headingMode==='compass');
+  courseBtn.classList.toggle("on", state.headingMode==='course');
+  compassBtn.textContent = state.headingMode==='compass' ? "🧭 나침반 끄기" : "🧭 나침반";
+}
+function setMode(mode){ state.headingMode=mode; setHeadingButtons(); updateHeading(); }
+
+compassBtn.onclick=async()=>{
+  if(state.headingMode==='compass'){ setMode('north'); toast("North-up"); return; }
+  const ok = state.headingOn || await enableCompass();
+  if(ok){ setMode('compass'); toast("나침반 ON — 값이 튀면 자동 North-up 폴백"); }
+};
+courseBtn.onclick=()=>{
+  if(state.headingMode==='course'){ setMode('north'); toast("North-up"); return; }
+  setMode('course');
+  toast(state.courseHeading!=null ? "진행방향 정렬 ON" : "진행방향 정렬 ON — 몇 걸음 걸으면 방향이 잡힙니다");
+};
+
+/* ════════════════════════ 시뮬레이션 (GPS 없이 배치 검증) ════════════════════════ */
+// 드래그로 부지 위를 걸어다니는 것처럼 위치 이동. step 2·5 검증용.
+let simActive=false;
+function enterSim(){
+  state.sim=true; simActive=true;
+  document.getElementById("simBtn").classList.add("on");
+  document.getElementById("simBtn").textContent="■ 시뮬 끄기";
+  if(!state.fix) applyFix(SITE_CENTER.lat, SITE_CENTER.lng, 8);
+  toast("시뮬레이션: 화면을 드래그해 이동 (레이더는 위치 반대로 흐름)");
+}
+function exitSim(){
+  state.sim=false; simActive=false;
+  document.getElementById("simBtn").classList.remove("on");
+  document.getElementById("simBtn").textContent="▶︎ 시뮬레이션";
+  updateStatus();
+}
+document.getElementById("simBtn").onclick=()=>{ state.sim?exitSim():enterSim(); };
+
+// 드래그 제스처:
+//   · 시뮬 ON  → 위치 이동(부지 걸어다니기)
+//   · 시뮬 OFF → 레이더 수동 회전(manual heading) : 나침반 없이 화면을 실제 방향에 맞춤
+let drag=null, rot=null;
+function ptr(e){ const t=e.touches?e.touches[0]:e; return {x:t.clientX,y:t.clientY}; }
+function metersPerDegLat(){ return 111132; }
+function metersPerDegLng(lat){ return 111320*Math.cos(lat*D2R); }
+const ptrAngle=p=>Math.atan2(p.y-CY, p.x-CX)*R2D; // 레이더 중심 기준 각도(도)
+
+cv.addEventListener("pointerdown", e=>{
+  const p=ptr(e);
+  if(state.sim) drag=p;
+  else rot={ prev:ptrAngle(p) };
+});
+window.addEventListener("pointermove", e=>{
+  const p=ptr(e);
+  if(state.sim && drag && state.fix){
+    const dx=p.x-drag.x, dy=p.y-drag.y; drag=p;
+    const mPerPx = SCALE.INNER_M/(SCALE.INNER_FRAC*RR);
+    const east = -dx*mPerPx, north = dy*mPerPx; // 드래그 반대 방향으로 사용자 이동
+    const a = state.heading*D2R;
+    const e2 = east*Math.cos(a) - north*Math.sin(a);
+    const n2 = east*Math.sin(a) + north*Math.cos(a);
+    state.fix.lat += n2/metersPerDegLat();
+    state.fix.lng += e2/metersPerDegLng(state.fix.lat);
+    state.fix.acc=8; state.rawFix={...state.fix};
+    refreshSnap();   // 시뮬 이동도 스냅을 다시 계산해야 화면이 따라온다
+    updateStatus(); evalGeofence();
+  } else if(!state.sim && rot){
+    // 손가락 회전각만큼 화면을 돌린다(콘텐츠가 손가락을 따라오도록 heading을 반대로 이동)
+    const cur=ptrAngle(p); let d=cur-rot.prev; rot.prev=cur;
+    if(d>180) d-=360; else if(d<-180) d+=360;
+    state.manualHeading=(state.manualHeading - d + 360)%360;
+    if(state.headingMode!=='manual'){ state.headingMode='manual'; setHeadingButtons(); }
+    updateHeading();
+  }
+});
+window.addEventListener("pointerup", ()=>{ drag=null; rot=null; });
+
+// 정렬 리셋: North-up 복귀 + 수동각 초기화 + 위치 튐 리셋
+document.getElementById("recenterBtn").onclick=()=>{
+  state.manualHeading=0; setMode('north');
+  if(state.rawFix){ state.fix={...state.rawFix}; refreshSnap(); }
+  else if(state.sim){ applyFix(SITE_CENTER.lat, SITE_CENTER.lng, 8); }
+  toast("North-up 정렬 + 위치 리셋");
+};
+
+/* ════════════════════════ 배경 부지 약도 토글 ════════════════════════ */
+document.getElementById("bgBtn").onclick=()=>{
+  state.bgOn=!state.bgOn;
+  document.getElementById("bgBtn").classList.toggle("on", state.bgOn);
+  if(state.bgOn) toast("배경 약도 ON — 건물 블록과 현재 위치(중심)를 비교해 좌표를 확인하세요");
+  updateStatus();
+};
+
+/* ════════════════════════ 경로망 스냅 토글(검증용) ════════════════════════ */
+// 스냅 전/후를 눈으로 비교할 수 있어야 현장에서 오매칭을 잡아낼 수 있다.
+document.getElementById("snapBtn").onclick=()=>{
+  state.snapOn=!state.snapOn;
+  document.getElementById("snapBtn").classList.toggle("on", state.snapOn);
+  refreshSnap();
+  toast(state.snapOn ? "경로 스냅 ON" : "경로 스냅 OFF — 원시 위치 표시");
+  updateStatus();
+};
+// 배경 ON 시 표시되는 현재 좌표를 탭하면 복사 (실측값 기록용)
+document.getElementById("legend").onclick=async()=>{
+  if(!state.bgOn || !state.fix) return;
+  const txt=`${state.fix.lat.toFixed(6)}, ${state.fix.lng.toFixed(6)}`;
+  try{ await navigator.clipboard.writeText(txt); toast("좌표 복사됨: "+txt); }
+  catch{ toast(txt); }
+};
+initSiteBg();
+
+/* ════════════════════════ 토스트 ════════════════════════ */
+let toastT=null;
+function toast(msg){
+  const el=document.getElementById("toast"); el.textContent=msg; el.classList.add("show");
+  clearTimeout(toastT); toastT=setTimeout(()=>el.classList.remove("show"), 2600);
+}
+
+/* ════════════════════════ 시작 게이트 ════════════════════════ */
+document.getElementById("startBtn").onclick=()=>{
+  document.getElementById("gate").classList.add("hidden");
+  startWatch();
+  requestAnimationFrame(draw);
+};
+
+// 위치가 30초 내 안 잡히면 시뮬 안내
+setTimeout(()=>{ if(!state.fix && !state.sim && document.getElementById("gate").classList.contains("hidden"))
+  toast("위치 미확보 — 실내이거나 권한 확인 필요. ‘시뮬레이션’으로 배치 확인 가능"); }, 30000);
+
+})();
+</script>
+</body>
+</html>

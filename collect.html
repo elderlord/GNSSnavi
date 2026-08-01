@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="color-scheme" content="dark">
+<title>좌표 수집 — GNSS 레이더</title>
+<style>
+  :root { --bg:#05121a; --fg:#c9f6ff; --acc:#33e1a1; --warn:#ffb454; --err:#ff5d6c; --dim:#5b7f8c; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; }
+  body {
+    background:var(--bg); color:var(--fg); font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    padding:16px; max-width:560px; margin:0 auto; -webkit-text-size-adjust:100%;
+  }
+  h1 { font-size:18px; margin:0 0 4px; color:var(--acc); }
+  p.sub { margin:0 0 16px; color:var(--dim); font-size:13px; }
+  .card { background:rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.08); border-radius:12px; padding:14px; margin-bottom:14px; }
+  label { display:block; font-size:12px; color:var(--dim); margin-bottom:6px; letter-spacing:.03em; }
+  input[type=text] {
+    width:100%; background:#02222b; border:1px solid #12414f; color:var(--fg);
+    border-radius:8px; padding:10px; font-size:15px; font-family:ui-monospace,Menlo,monospace;
+  }
+  select {
+    width:100%; background:#02222b; border:1px solid #12414f; color:var(--fg);
+    border-radius:8px; padding:11px 10px; font-size:16px; -webkit-appearance:none; appearance:none;
+    background-image:linear-gradient(45deg,transparent 50%,var(--acc) 50%),linear-gradient(135deg,var(--acc) 50%,transparent 50%);
+    background-position:calc(100% - 18px) 18px,calc(100% - 12px) 18px; background-size:6px 6px,6px 6px; background-repeat:no-repeat;
+  }
+  button {
+    appearance:none; border:0; border-radius:10px; padding:12px 16px; font-size:15px; font-weight:600;
+    background:var(--acc); color:#022; cursor:pointer; touch-action:manipulation;
+  }
+  button.ghost { background:transparent; color:var(--fg); border:1px solid #12414f; }
+  button:disabled { opacity:.4; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; }
+  .row > * { flex:1 1 auto; }
+  .big { font-size:26px; font-family:ui-monospace,Menlo,monospace; color:#fff; }
+  .stat { display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px dashed rgba(255,255,255,.08); }
+  .stat span:first-child { color:var(--dim); }
+  .out { font-family:ui-monospace,Menlo,monospace; font-size:14px; white-space:pre-wrap; word-break:break-all; background:#02222b; border-radius:8px; padding:12px; border:1px solid #12414f; }
+  .acc-good { color:var(--acc); } .acc-mid { color:var(--warn); } .acc-bad { color:var(--err); }
+  .bar { height:6px; border-radius:3px; background:#0a2a33; overflow:hidden; margin-top:8px; }
+  .bar > i { display:block; height:100%; background:var(--acc); width:0; transition:width .3s; }
+  .note { font-size:12px; color:var(--dim); margin-top:8px; }
+  .fixtype { font-size:13px; font-weight:700; padding:8px 10px; border-radius:8px; margin-bottom:10px; text-align:center;
+    background:#0a2a33; color:var(--dim); border:1px solid #12414f; }
+  .fixtype.gnss { color:var(--acc); border-color:var(--acc); }
+  .fixtype.wifi { color:var(--err); border-color:var(--err); }
+  .fixtype.weak { color:var(--warn); border-color:var(--warn); }
+</style>
+</head>
+<body>
+  <h1>좌표 수집 도구</h1>
+  <p class="sub">건물 정문 앞에서 30초간 수집 → 중앙값(median) 좌표를 산출합니다.<br>
+    <b style="color:var(--warn)">정확도가 계속 ±20m대로 고정되면 WiFi 측위입니다 → 폰의 WiFi를 끄고</b> 하늘 트인 곳에서 재측정하세요.<br>
+    아래 <b>측위 유형</b> 표시가 초록(위성 GNSS)일 때 값이 신뢰할 만합니다.</p>
+
+  <div class="card">
+    <label>수집 대상</label>
+    <select id="venueSel"></select>
+    <input type="text" id="labelIn" placeholder="직접 입력 (예: 자연사관 후문)" style="display:none;margin-top:8px">
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <button id="startBtn">30초 수집 시작</button>
+      <button id="stopBtn" class="ghost" disabled>중지</button>
+    </div>
+    <div class="bar"><i id="progBar"></i></div>
+    <div class="note" id="phase">대기 중 — 하늘이 트인 곳에서 기기를 정문 위치에 두고 시작하세요.</div>
+  </div>
+
+  <div class="card">
+    <div id="fixType" class="fixtype">측위 유형: —</div>
+    <div class="stat"><span>수집 샘플</span><b id="nSamples">0</b></div>
+    <div class="stat"><span>채택 샘플 (양호분만)</span><b id="nUsed">—</b></div>
+    <div class="stat"><span>현재 정확도</span><b id="curAcc">—</b></div>
+    <div class="stat"><span>최고 정확도</span><b id="bestAcc">—</b></div>
+    <div class="stat"><span>위치 산포</span><b id="scatter">—</b></div>
+    <div class="stat"><span>서로 다른 좌표</span><b id="uniq">—</b></div>
+    <div class="stat"><span>고도(위성 신호)</span><b id="altStat">—</b></div>
+    <div style="margin-top:10px" class="big" id="medCoord">— , —</div>
+  </div>
+
+  <div class="card">
+    <label>결과 (VENUES 항목에 붙여넣기)</label>
+    <div class="out" id="snippet">아직 수집 전입니다.</div>
+    <div class="row" style="margin-top:10px">
+      <button id="copyBtn" class="ghost" disabled>복사</button>
+      <button id="resetBtn" class="ghost" disabled>초기화</button>
+    </div>
+    <div class="note">tip: 각 건물당 2회 수집해 중앙값끼리 비교하면 신뢰도를 알 수 있습니다.</div>
+  </div>
+
+<script>
+(() => {
+  "use strict";
+  const DURATION_MS = 30000;
+  // 좌표 채택 상한(±m). 이 값보다 정확도가 나쁘면 좌표를 내주지 않는다.
+  // 도출 근거: 관 좌표 오차 + 실시간 위치 오차(±12m)의 합성이 지오펜스 반경(28m)을
+  //   해상해야 한다. ±12m 까지는 '정문 앞 진입 ≥95%, 45m 밖 오진입 ≤5%'를 만족하지만
+  //   ±15m 부터 무너진다(±21m 이면 정문 앞 진입 성공률 82%).
+  const LOCK_MAX = 12;
+  // 락 판정에 필요한 '기준 이내' 최소 샘플 수. 우연히 잘 나온 한두 개로 통과하는 것을 막는다.
+  const GOOD_MIN = 5;
+  const $ = id => document.getElementById(id);
+  let watchId = null, samples = [], startedAt = 0, timer = null;
+  let locked = false;   // 이번 세션에서 위성 락(≤LOCK_MAX)에 도달했는가
+
+  // index.html 의 VENUES 와 동일한 7개 관 (id/name 일치 유지)
+  const VENUE_OPTIONS = [
+    { id:"hall-nature",   name:"자연사관" },
+    { id:"hall-tech",     name:"과학기술관" },
+    { id:"hall-future",   name:"미래기술관" },
+    { id:"hall-nari",     name:"창의나래관" },
+    { id:"hall-children", name:"어린이과학관" },
+    { id:"hall-bio",      name:"생물탐구관" },
+    { id:"hall-astro",    name:"천체관" },
+  ];
+  const sel = $("venueSel");
+  VENUE_OPTIONS.forEach(v => { const o = document.createElement("option"); o.value = v.id; o.textContent = v.name; sel.appendChild(o); });
+  { const o = document.createElement("option"); o.value = "__custom__"; o.textContent = "기타(직접 입력)…"; sel.appendChild(o); }
+  sel.onchange = () => { $("labelIn").style.display = sel.value === "__custom__" ? "block" : "none"; render(); };
+  $("labelIn").oninput = render;
+
+  const median = arr => {
+    if (!arr.length) return NaN;
+    const s = [...arr].sort((a, b) => a - b), m = s.length >> 1;
+    return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+  };
+  const accClass = a => a == null ? "" : a <= 10 ? "acc-good" : a <= 25 ? "acc-mid" : "acc-bad";
+  const fmtAcc = a => a == null ? "—" : `±${a.toFixed(0)} m`;
+
+  // 두 지점 거리(m) — 산포 진단용
+  const distM = (a, b) => {
+    const R = 6371000, D2R = Math.PI / 180;
+    const dla = (b.lat - a.lat) * D2R, dlo = (b.lng - a.lng) * D2R;
+    const h = Math.sin(dla / 2) ** 2 + Math.cos(a.lat * D2R) * Math.cos(b.lat * D2R) * Math.sin(dlo / 2) ** 2;
+    return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+  };
+
+  function render() {
+    const n = samples.length;
+    $("nSamples").textContent = n;
+    if (!n) return;
+    const last = samples[n - 1];
+    $("curAcc").innerHTML = `<span class="${accClass(last.acc)}">${fmtAcc(last.acc)}</span>`;
+    const bestAcc = Math.min(...samples.map(s => s.acc));
+    $("bestAcc").innerHTML = `<span class="${accClass(bestAcc)}">${fmtAcc(bestAcc)}</span>`;
+
+    // ── 양호 샘플만 채택 ──
+    // 기준(LOCK_MAX) 이내 샘플만 좌표 계산에 쓴다. 워밍업 구간의 거친 값이 섞이지 않게 하고,
+    // 동시에 '운 좋은 샘플 한두 개'로 통과하지 않도록 최소 개수(GOOD_MIN)를 요구한다.
+    //   ※ 예전엔 '최고 정확도의 1.5배' 상대 기준 + 표본 부족 시 전체 사용 폴백을 썼는데,
+    //     ±9m 가 2개뿐이고 나머지가 ±22m 인 표본에서 폴백이 걸려 좌표는 ±22m 로 계산되면서도
+    //     게이트는 통과해버렸다(어린이과학관 실제 사례). 그래서 절대 기준으로 단순화했다.
+    const good = samples.filter(s => s.acc <= LOCK_MAX);
+    const used = good.length >= GOOD_MIN ? good : samples;   // 미달이면 참고 표시용으로만 전체 사용
+    $("nUsed").innerHTML = `${good.length} / ${n}`
+      + (good.length < GOOD_MIN ? ` <span class="acc-bad">(양호 ${GOOD_MIN}개 미만)</span>` : '');
+
+    const mLat = median(used.map(s => s.lat));
+    const mLng = median(used.map(s => s.lng));
+    const mAcc = median(used.map(s => s.acc));
+    $("medCoord").textContent = `${mLat.toFixed(6)} , ${mLng.toFixed(6)}`;
+
+    // ── 산포(scatter): 중앙값에서 각 샘플까지 거리의 중앙값 ──
+    // 진짜 위성 측위는 샘플이 수 m씩 흔들린다. WiFi/셀 측위는 AP DB의 같은 좌표를
+    // 반복 반환하므로 산포가 0에 가깝다 → 정확도 표시와 무관하게 결정적 단서.
+    const mid = { lat: mLat, lng: mLng };
+    const scat = median(used.map(s => distM(mid, s)));
+    const uniq = new Set(samples.map(s => `${s.lat.toFixed(6)},${s.lng.toFixed(6)}`)).size;
+    $("scatter").textContent = `${scat.toFixed(1)} m`;
+    $("uniq").innerHTML = `${uniq}개 ${uniq <= 2 && n >= 8 ? '<span class="acc-bad">(고정 — WiFi 의심)</span>' : ''}`;
+
+    const altVals = samples.map(s => s.alt).filter(a => a != null && !isNaN(a));
+    const hasAlt = altVals.length > 0;
+    $("altStat").textContent = hasAlt ? `${median(altVals).toFixed(0)} m (위성 ✓)` : "없음 (WiFi 의심)";
+
+    // ── 종합 진단 ──
+    // 판정 근거의 신뢰 순서: ① 좌표 고정(frozen) ② 정확도 ③ 고도(보조).
+    // 고도는 GPS가 정상이어도 기기에 따라 null 인 경우가 있어 단독 근거로 쓰지 않는다.
+    const frozen = n >= 8 && uniq <= 2;   // 같은 좌표만 반복 = AP DB 고정 위치
+    const ft = $("fixType"); let cls, msg;
+    if (frozen) {
+      cls = "wifi"; msg = "⚠ WiFi/셀 측위 — 좌표가 갱신되지 않습니다(같은 값 반복)"
+        + "<br><span style='font-weight:400;font-size:12px'>WiFi를 끄고 하늘 트인 곳에서 재측정하세요</span>";
+    } else if (bestAcc > 30) {
+      cls = "wifi"; msg = "⚠ 정확도 매우 낮음 — WiFi/셀 측위 의심"
+        + "<br><span style='font-weight:400;font-size:12px'>WiFi를 끄고 하늘 트인 곳에서 재측정하세요</span>";
+    } else if (locked) {
+      cls = "gnss"; msg = `✓ 위성 락 성공 — 양호 ${good.length}개 (±${mAcc.toFixed(0)}m) 채택`
+        + (hasAlt ? " · 고도 확인됨" : "");
+    } else if (good.length > 0) {
+      // 양호 샘플이 있긴 하나 개수가 부족한 경우 — 우연히 잘 나온 값에 속지 않도록 명시
+      cls = "weak"; msg = `✗ 채택 불가 — 기준 이내 샘플 ${good.length}개뿐 (${GOOD_MIN}개 이상 필요)`
+        + "<br><span style='font-weight:400;font-size:12px'>그 자리에서 조금 더 기다리거나, 더 트인 곳에서 재측정하세요</span>";
+    } else {
+      cls = "weak"; msg = `✗ 채택 불가 — 정확도 ±${bestAcc.toFixed(0)}m (기준 ±${LOCK_MAX}m 이하)`
+        + "<br><span style='font-weight:400;font-size:12px'>WiFi를 끄고 더 트인 곳에서 재측정하세요</span>";
+    }
+    ft.className = "fixtype " + cls; ft.innerHTML = msg;
+    // ── 품질 게이트 ──
+    // 좌표를 실제로 만든 표본의 품질로 판정한다(최고 정확도 한 개로 판단하지 않는다).
+    // 기준 이내 샘플이 GOOD_MIN 개 이상 모여야 락으로 인정.
+    locked = good.length >= GOOD_MIN;
+
+    const quality = frozen ? "WiFi의심(좌표고정)" : bestAcc > 30 ? "WiFi의심(정확도낮음)" : locked ? "위성(양호)" : "락실패";
+    const meta = `// ${quality} · 양호 ${good.length}/${n} · 최고 ±${bestAcc.toFixed(0)}m · 대표 ±${mAcc.toFixed(0)}m`
+      + ` · 산포 ${scat.toFixed(1)}m · ${new Date().toISOString()}`;
+
+    if (!locked) {
+      // 좌표를 '붙여넣기 가능한 형태'로 내주지 않는다. 참고값만 보여주고 재측정을 안내.
+      // 사유는 두 가지로 갈린다: (a) 전반적으로 정확도 미달  (b) 양호 샘플이 개수 부족
+      const reason = good.length > 0
+        ? `기준 이내(±${LOCK_MAX}m) 샘플이 ${good.length}개뿐 — ${GOOD_MIN}개 이상 필요\n`
+          + `  (좌표는 결국 대표 정확도 ±${mAcc.toFixed(0)}m 수준의 표본으로 계산됩니다)`
+        : `전 구간 정확도 미달 (최고 ±${bestAcc.toFixed(0)}m, 기준 ±${LOCK_MAX}m 이하)`;
+      $("snippet").textContent =
+`✗ 채택 불가 — ${reason}
+
+이 좌표를 쓰면 진입 판정이 무너집니다.
+  · 관 좌표 오차 ±${mAcc.toFixed(0)}m + 실시간 위치 오차 ±12m → 합성 ±${Math.round(Math.hypot(mAcc,12))}m
+  · 진입 반경 28m 를 해상하지 못해, 정문 앞에서도 진입을 놓칠 수 있습니다.
+
+재측정 방법
+  1. 폰 WiFi 끄기 (science-wifi 등에 붙으면 네트워크 측위로 고정됨)
+  2. 처마·벽에서 2~3m 떨어져 하늘이 트인 쪽으로
+  3. 앱을 켠 채 30초쯤 기다렸다가(위성 확보) 다시 시작
+
+참고값(채택 불가): ${mLat.toFixed(6)}, ${mLng.toFixed(6)}
+${meta}`;
+      return;
+    }
+
+    const sv = VENUE_OPTIONS.find(v => v.id === sel.value);
+    if (sv) {
+      // 선택한 관: index.html VENUES 의 해당 항목 lat/lng 만 아래 값으로 교체
+      $("snippet").textContent =
+`// ${sv.name} (${sv.id}) — VENUES 해당 항목의 lat/lng 를 아래로 교체
+  lat: ${mLat.toFixed(6)}, lng: ${mLng.toFixed(6)},
+${meta}`;
+    } else {
+      const label = ($("labelIn").value || "unnamed").trim();
+      $("snippet").textContent =
+`{ id: "TODO-id", name: "${label}",
+  lat: ${mLat.toFixed(6)}, lng: ${mLng.toFixed(6)},
+  radiusIn: 30, mapImage: "maps/TODO.png" },
+${meta}`;
+    }
+  }
+
+  function finish(reason) {
+    if (watchId != null) navigator.geolocation.clearWatch(watchId), watchId = null;
+    if (timer) clearInterval(timer), timer = null;
+    $("startBtn").disabled = false;
+    $("stopBtn").disabled = true;
+    // 복사는 '채택 가능한 좌표'가 있을 때만 — 락 실패 값이 실수로 붙여넣기되는 것을 막는다
+    $("resetBtn").disabled = samples.length === 0;
+    $("copyBtn").disabled = samples.length === 0 || !locked;
+    $("phase").textContent = reason;
+    $("progBar").style.width = "100%";
+  }
+
+  $("startBtn").onclick = () => {
+    if (!("geolocation" in navigator)) { $("phase").textContent = "이 브라우저는 Geolocation을 지원하지 않습니다."; return; }
+    samples = []; startedAt = Date.now(); locked = false;
+    $("startBtn").disabled = true; $("stopBtn").disabled = false;
+    $("copyBtn").disabled = $("resetBtn").disabled = true;
+    $("phase").textContent = "수집 중… 움직이지 말고 대기하세요.";
+    watchId = navigator.geolocation.watchPosition(
+      pos => {
+        samples.push({ lat: pos.coords.latitude, lng: pos.coords.longitude, acc: pos.coords.accuracy, alt: pos.coords.altitude });
+        render();
+      },
+      err => finish("오류: " + err.message + " (위치 권한을 허용했는지 확인)"),
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
+    );
+    timer = setInterval(() => {
+      const p = Math.min(1, (Date.now() - startedAt) / DURATION_MS);
+      $("progBar").style.width = (p * 100) + "%";
+      if (p >= 1) finish(`완료 — 샘플 ${samples.length}개 수집. 중앙값을 복사하세요.`);
+    }, 200);
+  };
+
+  $("stopBtn").onclick = () => finish(`중지됨 — 샘플 ${samples.length}개.`);
+  $("resetBtn").onclick = () => {
+    samples = []; locked = false; $("progBar").style.width = "0";
+    $("nSamples").textContent = "0";
+    $("curAcc").textContent = $("bestAcc").textContent = $("altStat").textContent = "—";
+    $("nUsed").textContent = $("scatter").textContent = $("uniq").textContent = "—";
+    $("fixType").className = "fixtype"; $("fixType").textContent = "측위 유형: —";
+    $("medCoord").textContent = "— , —"; $("snippet").textContent = "아직 수집 전입니다.";
+    $("copyBtn").disabled = $("resetBtn").disabled = true;
+    $("phase").textContent = "초기화됨.";
+  };
+  $("copyBtn").onclick = async () => {
+    try { await navigator.clipboard.writeText($("snippet").textContent); $("copyBtn").textContent = "복사됨 ✓";
+      setTimeout(() => $("copyBtn").textContent = "복사", 1500); }
+    catch { const r = document.createRange(); r.selectNode($("snippet")); getSelection().removeAllRanges(); getSelection().addRange(r); }
+  };
+})();
+</script>
+</body>
+</html>

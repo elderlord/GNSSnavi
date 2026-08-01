@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="color-scheme" content="dark">
+<title>GPS 진단 (원시 샘플 기록)</title>
+<style>
+  :root { --bg:#0d0f18; --fg:#dfe6ff; --acc:#7aa2ff; --ok:#33e1a1; --warn:#ffb454; --err:#ff5d6c; --dim:#7d87a8; }
+  *{box-sizing:border-box;}
+  html,body{margin:0;background:var(--bg);color:var(--fg);
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;-webkit-text-size-adjust:100%;}
+  body{padding:14px;max-width:640px;margin:0 auto;}
+  h1{font-size:17px;margin:0 0 4px;color:var(--acc);}
+  p.sub{margin:0 0 14px;color:var(--dim);font-size:12.5px;}
+  .card{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09);border-radius:12px;padding:12px;margin-bottom:12px;}
+  button{appearance:none;border:0;border-radius:10px;padding:12px 16px;font-size:15px;font-weight:600;
+    background:var(--acc);color:#08101f;cursor:pointer;touch-action:manipulation;}
+  button.ghost{background:transparent;color:var(--fg);border:1px solid #2b3550;}
+  button:disabled{opacity:.4;}
+  .row{display:flex;gap:8px;flex-wrap:wrap;}.row>*{flex:1 1 auto;}
+  .stat{display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px dashed rgba(255,255,255,.08);font-size:13px;}
+  .stat span:first-child{color:var(--dim);}
+  .verdict{font-size:14px;font-weight:700;padding:9px 10px;border-radius:8px;margin-bottom:10px;text-align:center;
+    background:#141a2b;border:1px solid #2b3550;color:var(--dim);}
+  .verdict.ok{color:var(--ok);border-color:var(--ok);} .verdict.bad{color:var(--err);border-color:var(--err);}
+  .verdict.mid{color:var(--warn);border-color:var(--warn);}
+  pre{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.45;background:#080b14;
+    border:1px solid #202a42;border-radius:8px;padding:10px;overflow-x:auto;white-space:pre;margin:0;max-height:260px;}
+  .bar{height:5px;border-radius:3px;background:#1a2136;overflow:hidden;margin-top:8px;}
+  .bar>i{display:block;height:100%;background:var(--acc);width:0;transition:width .3s;}
+  .note{font-size:11.5px;color:var(--dim);margin-top:8px;}
+  label{display:block;font-size:12px;color:var(--dim);margin-bottom:5px;}
+  select{width:100%;background:#0b1120;border:1px solid #2b3550;color:var(--fg);border-radius:8px;padding:10px;font-size:16px;}
+</style>
+</head>
+<body>
+  <h1>GPS 진단 — 원시 샘플 기록</h1>
+  <p class="sub">요약값이 아니라 <b>모든 샘플</b>을 그대로 기록합니다. 60초간 한자리에 서서 수집한 뒤,
+     맨 아래 <b>원시 로그 복사</b>를 눌러 그대로 붙여넣어 주세요.</p>
+
+  <div class="card">
+    <label>측정 위치 (기록용)</label>
+    <select id="place">
+      <option>자연사관</option><option>과학기술관</option><option>미래기술관</option>
+      <option>창의나래관</option><option>어린이과학관</option><option>생물탐구관</option>
+      <option>천체관</option><option>기타/야외 개활지</option>
+    </select>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <button id="startBtn">60초 진단 시작</button>
+      <button id="stopBtn" class="ghost" disabled>중지</button>
+    </div>
+    <div class="bar"><i id="prog"></i></div>
+    <div class="note" id="phase">대기 중 — 하늘이 트인 정도가 결과를 좌우합니다. 그대로 서서 시작하세요.</div>
+  </div>
+
+  <div class="card">
+    <div id="verdict" class="verdict">판정 대기</div>
+    <div class="stat"><span>샘플 수 / 갱신 간격</span><b id="nS">—</b></div>
+    <div class="stat"><span>정확도 최고 → 최종</span><b id="accRange">—</b></div>
+    <div class="stat"><span>위성 락까지 걸린 시간</span><b id="ttff">—</b></div>
+    <div class="stat"><span>좌표 군집 수</span><b id="clusters">—</b></div>
+    <div class="stat"><span>최대 점프 (직전 대비)</span><b id="maxJump">—</b></div>
+    <div class="stat"><span>고도 제공</span><b id="alt">—</b></div>
+  </div>
+
+  <div class="card">
+    <label>정확도 추이 (좌→우 = 시간)</label>
+    <pre id="spark">—</pre>
+    <div class="note">막대가 낮아질수록 정확도가 좋아지는 것. 계속 평평하면 위성 락이 안 걸린 상태입니다.</div>
+  </div>
+
+  <div class="card">
+    <label>원시 로그</label>
+    <pre id="log">아직 수집 전입니다.</pre>
+    <div class="row" style="margin-top:10px">
+      <button id="copyBtn" class="ghost" disabled>원시 로그 복사</button>
+      <button id="resetBtn" class="ghost" disabled>초기화</button>
+    </div>
+  </div>
+
+<script>
+(() => {
+"use strict";
+const DUR = 60000, $ = id => document.getElementById(id);
+let watchId=null, S=[], t0=0, timer=null;
+
+const R=6371000, D2R=Math.PI/180;
+function dist(a,b){
+  const dla=(b.lat-a.lat)*D2R, dlo=(b.lng-a.lng)*D2R;
+  const h=Math.sin(dla/2)**2+Math.cos(a.lat*D2R)*Math.cos(b.lat*D2R)*Math.sin(dlo/2)**2;
+  return 2*R*Math.asin(Math.min(1,Math.sqrt(h)));
+}
+const med=a=>{ if(!a.length) return NaN; const s=[...a].sort((x,y)=>x-y), m=s.length>>1;
+  return s.length%2? s[m] : (s[m-1]+s[m])/2; };
+
+// 좌표 군집화: 20m 이상 떨어지면 다른 군집으로 본다.
+// (WiFi 고정점과 위성 실위치가 섞이면 군집이 2개 이상으로 갈린다 → 중앙값이 그 사이 엉뚱한 점을 가리킴)
+function cluster(samples, thr=20){
+  const cs=[];
+  for(const s of samples){
+    let hit=null;
+    for(const c of cs) if(dist(c.c, s) < thr){ hit=c; break; }
+    if(hit){ hit.n++; hit.pts.push(s);
+      hit.c={ lat:med(hit.pts.map(p=>p.lat)), lng:med(hit.pts.map(p=>p.lng)) }; }
+    else cs.push({ c:{lat:s.lat,lng:s.lng}, n:1, pts:[s] });
+  }
+  return cs.sort((a,b)=>b.n-a.n);
+}
+
+function render(){
+  const n=S.length; if(!n){ return; }
+  const accs=S.map(s=>s.acc), best=Math.min(...accs), last=S[n-1].acc;
+  const dts=S.slice(1).map((s,i)=>s.t-S[i].t);
+  $("nS").textContent = `${n}개 / 평균 ${dts.length? (med(dts)/1000).toFixed(1):'—'}초`;
+  $("accRange").textContent = `±${best.toFixed(0)}m → ±${last.toFixed(0)}m`;
+
+  const lock = S.find(s=>s.acc<=10);
+  $("ttff").innerHTML = lock ? `<span style="color:var(--ok)">${(lock.t/1000).toFixed(0)}초</span>`
+                             : `<span style="color:var(--err)">락 없음 (60초 내 ±10m 미달)</span>`;
+
+  const cs=cluster(S);
+  $("clusters").innerHTML = cs.length===1 ? `1개 (단일 위치)` :
+    `<span style="color:var(--warn)">${cs.length}개 — ${cs.map(c=>c.n).join('/')}개씩</span>`;
+
+  let mj=0, mjAt=0;
+  for(let i=1;i<n;i++){ const d=dist(S[i-1],S[i]); if(d>mj){ mj=d; mjAt=S[i].t/1000; } }
+  $("maxJump").textContent = `${mj.toFixed(1)} m` + (mj>15? ` (${mjAt.toFixed(0)}초 지점)` : '');
+
+  const alts=S.map(s=>s.alt).filter(a=>a!=null&&!isNaN(a));
+  $("alt").textContent = alts.length ? `있음 (중앙 ${med(alts).toFixed(0)}m)` : "없음";
+
+  // 정확도 추이 스파크라인
+  const blocks="▁▂▃▄▅▆▇█", mx=Math.max(...accs);
+  $("spark").textContent = accs.map(a=>blocks[Math.min(7,Math.floor(a/mx*7))]).join("")
+    + `\n최고 ±${best.toFixed(0)}m · 최악 ±${mx.toFixed(0)}m`;
+
+  // 판정
+  const v=$("verdict");
+  if(cs.length>1){ v.className="verdict bad";
+    v.textContent=`⚠ 좌표가 ${cs.length}개 지점으로 갈림 — 중앙값이 실제 어느 쪽도 아닐 수 있음`; }
+  else if(!lock && best>18){ v.className="verdict bad";
+    v.textContent="⚠ 위성 락 실패 — 네트워크(WiFi/셀) 위치로 보임"; }
+  else if(!lock){ v.className="verdict mid"; v.textContent="△ 정확도 보통 — 위성 신호 약함"; }
+  else { v.className="verdict ok"; v.textContent="✓ 위성 락 성공 — 이 좌표는 신뢰 가능"; }
+
+  // 원시 로그 (붙여넣기용)
+  const head=`# ${$("place").value} · ${new Date().toISOString()}\n`
+    +`#  t(s)      lat        lng       acc  alt   Δ직전(m)\n`;
+  $("log").textContent = head + S.map((s,i)=>{
+    const d = i? dist(S[i-1],s) : 0;
+    return `${(s.t/1000).toFixed(1).padStart(6)} ${s.lat.toFixed(6)} ${s.lng.toFixed(6)} `
+         + `${s.acc.toFixed(0).padStart(4)} ${(s.alt==null?'—':s.alt.toFixed(0)).padStart(5)} ${d.toFixed(1).padStart(7)}`;
+  }).join("\n");
+}
+
+function finish(msg){
+  if(watchId!=null){ navigator.geolocation.clearWatch(watchId); watchId=null; }
+  if(timer){ clearInterval(timer); timer=null; }
+  $("startBtn").disabled=false; $("stopBtn").disabled=true;
+  $("copyBtn").disabled=$("resetBtn").disabled = S.length===0;
+  $("phase").textContent=msg; $("prog").style.width="100%";
+}
+
+$("startBtn").onclick=()=>{
+  if(!("geolocation" in navigator)){ $("phase").textContent="Geolocation 미지원"; return; }
+  S=[]; t0=Date.now();
+  $("startBtn").disabled=true; $("stopBtn").disabled=false;
+  $("copyBtn").disabled=$("resetBtn").disabled=true;
+  $("phase").textContent="수집 중 — 움직이지 말고 60초 기다리세요.";
+  watchId=navigator.geolocation.watchPosition(
+    p=>{ S.push({ t:Date.now()-t0, lat:p.coords.latitude, lng:p.coords.longitude,
+                  acc:p.coords.accuracy, alt:p.coords.altitude,
+                  spd:p.coords.speed, hdg:p.coords.heading });
+         render(); },
+    e=>finish("오류: "+e.message+" (위치 권한 확인)"),
+    { enableHighAccuracy:true, maximumAge:0, timeout:20000 }
+  );
+  timer=setInterval(()=>{
+    const p=Math.min(1,(Date.now()-t0)/DUR);
+    $("prog").style.width=(p*100)+"%";
+    if(p>=1) finish(`완료 — ${S.length}개 수집. 아래 '원시 로그 복사'를 눌러 붙여넣어 주세요.`);
+  },200);
+};
+$("stopBtn").onclick=()=>finish(`중지 — ${S.length}개 수집.`);
+$("resetBtn").onclick=()=>{
+  S=[]; $("prog").style.width="0"; $("log").textContent="아직 수집 전입니다.";
+  ["nS","accRange","ttff","clusters","maxJump","alt"].forEach(i=>$(i).textContent="—");
+  $("spark").textContent="—"; $("verdict").className="verdict"; $("verdict").textContent="판정 대기";
+  $("copyBtn").disabled=$("resetBtn").disabled=true; $("phase").textContent="초기화됨.";
+};
+$("copyBtn").onclick=async()=>{
+  const txt=$("log").textContent;
+  try{ await navigator.clipboard.writeText(txt); $("copyBtn").textContent="복사됨 ✓";
+    setTimeout(()=>$("copyBtn").textContent="원시 로그 복사",1500); }
+  catch{ const r=document.createRange(); r.selectNode($("log"));
+    getSelection().removeAllRanges(); getSelection().addRange(r); }
+};
+})();
+</script>
+</body>
+</html>
