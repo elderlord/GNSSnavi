@@ -119,11 +119,11 @@ function simplify(list, eps){
   return left.slice(0,-1).concat(right);
 }
 
-function render(){
+function render(curAcc){
   $("nPts").textContent = `${pts.length} / ${total}`;
+  const a = curAcc != null ? curAcc : (pts.length ? pts[pts.length-1].acc : null);
+  if(a != null) $("acc").innerHTML = `<span class="${a<=LOCK_MAX?'good':'bad'}">±${a.toFixed(0)}m</span>`;
   if(!pts.length) return;
-  $("acc").innerHTML = `<span class="${pts[pts.length-1].acc<=LOCK_MAX?'good':'bad'}">`
-    + `±${pts[pts.length-1].acc.toFixed(0)}m</span>`;
   let L=0; for(let i=1;i<pts.length;i++) L+=distM(pts[i-1], pts[i]);
   $("len").textContent = `${L.toFixed(0)} m`;
 
@@ -157,11 +157,11 @@ $("startBtn").onclick=()=>{
     p=>{
       total++;
       const acc=p.coords.accuracy;
-      if(acc > LOCK_MAX) return;                  // 기준 미달 샘플은 버린다
+      if(acc > LOCK_MAX){ render(acc); return; }  // 기준 미달 — 버리되 화면에는 알린다
       const q={lat:p.coords.latitude, lng:p.coords.longitude, acc};
       // 1m 미만 이동은 노이즈로 보고 건너뛴다
-      if(pts.length && distM(pts[pts.length-1], q) < 1) return;
-      pts.push(q); render();
+      if(pts.length && distM(pts[pts.length-1], q) < 1){ render(acc); return; }
+      pts.push(q); render(acc);
     },
     e=>finish("오류: "+e.message+" (위치 권한 확인)"),
     { enableHighAccuracy:true, maximumAge:0, timeout:20000 }
