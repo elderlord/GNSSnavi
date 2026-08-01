@@ -184,6 +184,27 @@ const GEO = {
   NEAR_MULT: 1.8,   // 수동 제안을 띄울 근접 범위 (radiusIn 배수)
 };
 
+/* ════════════════════════ 산책로 경로망 ════════════════════════ */
+// 관람객이 실제로 다니는 산책로를 폴리라인으로 등록한다. path.html 로 현장에서 걸으며 기록.
+// 비어 있으면 스냅은 완전히 비활성이고 기존 동작이 그대로 유지된다.
+//   pts   : [[lat,lng], ...] 순서대로 이은 폴리라인 (방향 제약은 걸지 않음 — 산책로는 양방향)
+//   venue : 선택. 관 입구로 이어지는 지선에 달아두면, 이 경로에 스냅될 때 해당 관을
+//           지오펜스 후보로 우선한다. 20m 간격의 인접 관을 '거리'가 아니라 '위상'으로 구분.
+const PATHS = [
+  // 예시(실측 후 교체):
+  // { id:"main", name:"정문 직선로", pts:[[36.37550,127.37650],[36.37562,127.37668]] },
+  // { id:"spur-tech", name:"과학기술관 지선", venue:"hall-tech",
+  //   pts:[[36.37655,127.37455],[36.37669,127.37472]] },
+];
+
+// 스냅 파라미터 — 근거는 docs/superpowers/specs/2026-08-01-path-network-snapping-design.md
+const SNAP = {
+  PATH_ERR: 8,   // 기록된 경로망 자체의 가정 오차(m). 경로도 GPS로 땄으므로 0이 아니다
+  K_TOL:    1.5, // 결합 불확실성의 몇 배까지 '경로 위'로 인정할지
+  SNAP_MAX: 25,  // 절대 상한(m). 아무리 부정확해도 이보다 멀면 스냅하지 않는다
+  MAX_W:    0.8, // 완전 스냅(1.0)을 허용하지 않아 오매칭 피해를 제한
+};
+
 /* 레이더 스케일 2단 고정 (§4.1) */
 const SCALE = { INNER_M: 150, OUTER_M: 600, INNER_FRAC: 0.60 }; // 0~150m→0~60%, 150~600m→60~100%
 
@@ -218,6 +239,59 @@ function latlngToSite(lat,lng){
   return { x:(lng-b.lngMin)/(b.lngMax-b.lngMin)*b.VW,
            y:(b.latMax-lat)/(b.latMax-b.latMin)*b.VH };
 }
+
+/* ──────────────────────────────────────────────────────────────
+   경로망 스냅 (순수 함수)
+   위경도를 기준점 기준 로컬 미터 평면으로 옮겨 평면기하로 계산한다.
+   수백 m 범위에서는 등장방형 근사로 충분하다.
+   ────────────────────────────────────────────────────────────── */
+function toLocalM(p, ref){
+  return { x:(p.lng-ref.lng)*111320*Math.cos(ref.lat*D2R),
+           y:(p.lat-ref.lat)*111132 };
+}
+function fromLocalM(v, ref){
+  return { lat: ref.lat + v.y/111132,
+           lng: ref.lng + v.x/(111320*Math.cos(ref.lat*D2R)) };
+}
+// 점 p 에서 선분 ab 위의 최근접점. 수선의 발이 선분 밖이면 가까운 끝점을 준다.
+function closestOnSeg(p, a, b){
+  const vx=b.x-a.x, vy=b.y-a.y, L2=vx*vx+vy*vy;
+  if(L2===0) return { x:a.x, y:a.y, t:0 };
+  let t=((p.x-a.x)*vx + (p.y-a.y)*vy)/L2;
+  t=Math.max(0, Math.min(1, t));
+  return { x:a.x+t*vx, y:a.y+t*vy, t };
+}
+// 현재 위치를 등록된 산책로 위로 끌어온다. 조건 미달이면 null(원위치 유지).
+function snapToPaths(fix, acc, paths){
+  const list = paths || PATHS;
+  if(!Array.isArray(list) || !list.length) return null;
+  const ref = fix, p = { x:0, y:0 };   // fix 자신이 기준이므로 원점
+  let best = null;
+  for(const path of list){
+    const pts = path.pts;
+    if(!Array.isArray(pts) || pts.length < 2) continue;   // 점 2개 미만은 무시
+    for(let i=0; i<pts.length-1; i++){
+      const a = toLocalM({lat:pts[i][0],   lng:pts[i][1]},   ref);
+      const b = toLocalM({lat:pts[i+1][0], lng:pts[i+1][1]}, ref);
+      const c = closestOnSeg(p, a, b);
+      const d = Math.hypot(c.x, c.y);
+      if(!best || d < best.dist) best = { dist:d, pt:c, path };
+    }
+  }
+  if(!best) return null;
+  // 허용 거리: 현재 정확도와 경로망 오차의 결합. 경로도 오차를 안고 있으므로
+  // 현재 정확도만으로 판단하면 실제로 경로 위에 있는데도 스냅을 놓친다.
+  const tol = Math.min(SNAP.K_TOL*Math.hypot(acc, SNAP.PATH_ERR), SNAP.SNAP_MAX);
+  if(best.dist > tol) return null;
+  // 가중 보간 — 정확도가 나쁠수록 경로를 더 신뢰한다. 완전 스냅은 하지 않는다.
+  const w = Math.min(SNAP.MAX_W, acc/(acc + SNAP.PATH_ERR));
+  const moved = fromLocalM({ x:best.pt.x*w, y:best.pt.y*w }, ref);
+  return { lat:moved.lat, lng:moved.lng, pathId:best.path.id,
+           venue:best.path.venue || null, dist:best.dist, w };
+}
+
+// 테스트 seam — 순수 함수를 외부에서 검증하기 위해 노출한다. 앱 동작에는 영향이 없다.
+window.__gnssnavi = { snapToPaths, closestOnSeg, toLocalM, fromLocalM, SNAP };
 
 /* ════════════════════════ 상태 ════════════════════════ */
 const state = {
