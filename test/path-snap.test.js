@@ -202,6 +202,34 @@ const near = (a, b, tol) => Math.abs(a - b) <= tol;
       `경로없음→${baseline} / 지선있음→${withSpur} (shown=${shown})`);
   }
 
+  // ── 10b) 정지 상태에서 판별 결과가 뒤바뀌지 않는다 (회귀) ──
+  // 겹친 구역에서 판별에 진 관이 혼자 dwell 을 다시 채워 단일 후보로 들어오면
+  // 스냅·방향 우선순위를 건너뛰고 화면을 덮어쓰던 결함의 회귀 테스트.
+  {
+    const ctxF = await browser.newContext({
+      geolocation: { latitude: 36.376690, longitude: 127.374720, accuracy: 8 },
+      permissions: ['geolocation'],
+    });
+    const pF = await ctxF.newPage();
+    await pF.goto('file://' + ROOT + '/index.html');
+    await pF.evaluate(() => {
+      window.__gnssnavi.setPaths([{
+        id: 'spur-future', name: '미래기술관 지선', venue: 'hall-future',
+        pts: [[36.376770, 127.374600], [36.376780, 127.374610]],
+      }]);
+    });
+    await pF.click('#startBtn');
+    await pF.waitForTimeout(4200);
+    const first = (await pF.textContent('#indoorName')).trim();
+    // 움직이지 않고 dwell 두 주기를 더 보낸다 — 예전에는 여기서 뒤바뀌었다
+    await pF.waitForTimeout(6000);
+    const later = (await pF.textContent('#indoorName')).trim();
+    check('정지 상태에서 판별 결과가 유지된다',
+      first === '미래기술관' && later === '미래기술관',
+      `4.2s→${first} / 10.2s→${later}`);
+    await ctxF.close();
+  }
+
   // ── 11) pickCandidate: 스냅 venue 없으면 진행방향, 그것도 없으면 최근접 ──
   {
     const p4 = await (await browser.newContext()).newPage();

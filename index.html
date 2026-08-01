@@ -580,13 +580,29 @@ function evalGeofence(){
       } else st.sinceOut = null;
     }
   }
-  // 진입 후보가 여럿이면 하나만 고른다(배열 순서로 결정되지 않게)
+  // 진입 후보가 여럿이면 하나만 고른다(배열 순서로 결정되지 않게).
+  // 이미 표시 중인 관이 아직 이탈하지 않았다면 그것도 후보에 넣어 함께 비교한다.
+  // 그러지 않으면 겹친 구역에서 판별에 진 관이 혼자 dwell 을 다시 채워
+  // 단일 후보로 들어와 스냅·방향 우선순위를 건너뛰고 화면을 덮어쓴다(정지 상태 오전환).
   if(ready.length){
-    const win = pickCandidate(ready);
-    win.st.inside = true; win.st.sinceIn = null;
-    enterIndoor(win.v);
-    // 나머지 후보는 dwell 타이머만 되돌려 다음 기회를 기다린다
-    for(const c of ready) if(c !== win) c.st.sinceIn = null;
+    const cands = ready.slice();
+    if(state.indoor){
+      const cur = VENUES.find(v => v.id === state.indoor.id);
+      const curSt = cur && geoTimers.get(cur.id);
+      if(cur && curSt && curSt.inside && !cands.some(c => c.v.id === cur.id)){
+        const dCur = haversine(POS(), cur);
+        // 이탈 조건을 아직 넘지 않았을 때만 계속 겨루게 한다
+        if(dCur <= cur.radiusIn + GEO.OUT_MARGIN + GEO.ACC_K*acc) cands.push({ v:cur, d:dCur, st:curSt });
+      }
+    }
+    const win = pickCandidate(cands);
+    if(win){
+      win.st.inside = true; win.st.sinceIn = null;
+      // 이미 표시 중인 관이 그대로 이겼으면 화면을 다시 그리지 않는다
+      if(!state.indoor || state.indoor.id !== win.v.id) enterIndoor(win.v);
+    }
+    // 진 후보들의 dwell 타이머는 되돌린다(다음 기회에 다시 겨룬다)
+    for(const c of cands) if(c !== win) c.st.sinceIn = null;
   }
   updateNearSuggest(state.indoor ? null : suggest);
 }
