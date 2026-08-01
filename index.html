@@ -94,6 +94,7 @@
       <button id="compassBtn">🧭 나침반</button>
       <button id="courseBtn">🚶 진행방향</button>
       <button id="bgBtn">🗺 배경약도</button>
+      <button id="snapBtn" class="on">🛤 경로스냅</button>
       <button id="simBtn">▶︎ 시뮬레이션</button>
       <button id="recenterBtn">◎ 정렬 리셋</button>
     </div>
@@ -290,8 +291,13 @@ function snapToPaths(fix, acc, paths){
            venue:best.path.venue || null, dist:best.dist, w };
 }
 
-// 테스트 seam — 순수 함수를 외부에서 검증하기 위해 노출한다. 앱 동작에는 영향이 없다.
-window.__gnssnavi = { snapToPaths, closestOnSeg, toLocalM, fromLocalM, SNAP };
+// 테스트 seam — 순수 함수와 상태를 외부에서 검증하기 위해 노출한다. 앱 동작에는 영향이 없다.
+window.__gnssnavi = {
+  snapToPaths, closestOnSeg, toLocalM, fromLocalM, SNAP,
+  getState: () => state,
+  POS: () => POS(),
+  setPaths: (arr) => { PATHS.length = 0; PATHS.push(...arr); },
+};
 
 /* ════════════════════════ 상태 ════════════════════════ */
 const state = {
@@ -307,6 +313,8 @@ const state = {
   _courseRef:null,     // 진행방향 계산용 직전 위치
   sim:false,           // 시뮬레이션 모드
   bgOn:false,          // 배경 부지 약도 표시
+  snap:null,           // 최근 스냅 결과 {lat,lng,pathId,venue,dist,w} | null
+  snapOn:true,         // 경로망 스냅 사용 여부(검증 토글)
   indoor:null,         // 현재 실내로 판정된 venue
   t0:performance.now()
 };
@@ -390,8 +398,8 @@ function draw(now){
   // 마커
   if(state.fix){
     for(const v of VENUES){
-      const d = haversine(state.fix, v);
-      const brg = bearing(state.fix, v);
+      const d = haversine(POS(), v);
+      const brg = bearing(POS(), v);
       const rnorm = distToNorm(d);
       const clamped = rnorm>=1;
       const r = Math.min(rnorm,1)*RR;
@@ -436,8 +444,8 @@ function initSiteBg(){
 function drawSiteMap(){
   if(!state.bgOn || !siteBgReady || !state.fix) return;
   const b=SITE_BOUNDS;
-  const su=latlngToSite(state.fix.lat, state.fix.lng);        // 사용자 위치의 도식 px
-  const mx=(b.lngMax-b.lngMin)*metersPerDegLng(state.fix.lat)/b.VW; // m/도식x-px
+  const P=POS(); const su=latlngToSite(P.lat, P.lng);        // 사용자 위치의 도식 px
+  const mx=(b.lngMax-b.lngMin)*metersPerDegLng(P.lat)/b.VW; // m/도식x-px
   const my=(b.latMax-b.latMin)*metersPerDegLat()/b.VH;             // m/도식y-px
   const s=SCALE.INNER_FRAC*RR/SCALE.INNER_M;                        // px/m (선형존)
   const hd=state.heading*D2R, cos=Math.cos(hd), sin=Math.sin(hd);
@@ -474,6 +482,12 @@ function headingLabel(){
 }
 
 /* ════════════════════════ 위치 스무딩 ════════════════════════ */
+// 판정·렌더링에 쓸 위치. 스냅이 유효하면 스냅 위치, 아니면 평활화된 원시 위치.
+// 좌표 readout(legend)은 이 함수를 쓰지 않는다 — 측정값에 보정을 섞지 않기 위함.
+function POS(){
+  if(state.snapOn && state.snap) return { lat:state.snap.lat, lng:state.snap.lng, acc:state.fix.acc };
+  return state.fix;
+}
 function applyFix(lat,lng,acc,speed=null,crs=null){
   state.rawFix={lat,lng,acc};
   if(!state.fix){ state.fix={lat,lng,acc}; }
@@ -484,6 +498,8 @@ function applyFix(lat,lng,acc,speed=null,crs=null){
     state.fix.lng += (lng-state.fix.lng)*k;
     state.fix.acc = acc;
   }
+  // 산책로 경로망 스냅 — 조건 미달이면 null 이라 원위치가 유지된다
+  state.snap = state.snapOn ? snapToPaths(state.fix, state.fix.acc) : null;
   // GPS 진행방향(course over ground): 기기가 heading을 주면 사용, 아니면 원시 위치 이력으로 계산.
   // 정지 상태(느린 속도/짧은 이동)에서는 갱신하지 않아 마지막 진행방향을 유지한다.
   const here={lat,lng};
@@ -512,7 +528,7 @@ function evalGeofence(){
 
   for(const v of VENUES){
     const st = geoTimers.get(v.id);
-    const d = haversine(state.fix, v);
+    const d = haversine(POS(), v);
     // 정확도 적응 반경
     const rInEff  = v.radiusIn - GEO.ACC_K * acc;
     const rOutEff = v.radiusIn + GEO.OUT_MARGIN + GEO.ACC_K * acc;
@@ -665,7 +681,7 @@ function updateStatus(){
   const s=document.getElementById("status"), p=document.getElementById("fixPill");
   if(!state.fix){ s.textContent="위치 확보 중…"; return; }
   const acc=state.fix.acc;
-  const near=[...VENUES].map(v=>({v,d:haversine(state.fix,v)})).sort((a,b)=>a.d-b.d)[0];
+  const near=[...VENUES].map(v=>({v,d:haversine(POS(),v)})).sort((a,b)=>a.d-b.d)[0];
   s.innerHTML=`가장 가까운 곳: <b>${near.v.name}</b> · ${near.d<1000?near.d.toFixed(0)+"m":(near.d/1000).toFixed(2)+"km"}`
     + (state.sim?` · <b style="color:var(--warn)">SIM</b>`:``)
     + ` · ${headingLabel()}`;
@@ -813,6 +829,17 @@ document.getElementById("bgBtn").onclick=()=>{
   state.bgOn=!state.bgOn;
   document.getElementById("bgBtn").classList.toggle("on", state.bgOn);
   if(state.bgOn) toast("배경 약도 ON — 건물 블록과 현재 위치(중심)를 비교해 좌표를 확인하세요");
+  updateStatus();
+};
+
+/* ════════════════════════ 경로망 스냅 토글(검증용) ════════════════════════ */
+// 스냅 전/후를 눈으로 비교할 수 있어야 현장에서 오매칭을 잡아낼 수 있다.
+document.getElementById("snapBtn").onclick=()=>{
+  state.snapOn=!state.snapOn;
+  document.getElementById("snapBtn").classList.toggle("on", state.snapOn);
+  if(!state.snapOn) state.snap=null;
+  else if(state.fix) state.snap=snapToPaths(state.fix, state.fix.acc);
+  toast(state.snapOn ? "경로 스냅 ON" : "경로 스냅 OFF — 원시 위치 표시");
   updateStatus();
 };
 // 배경 ON 시 표시되는 현재 좌표를 탭하면 복사 (실측값 기록용)

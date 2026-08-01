@@ -116,6 +116,54 @@ const near = (a, b, tol) => Math.abs(a - b) <= tol;
     window.__gnssnavi.snapToPaths(BASE, 8, [{ id: 'bad', name: '점하나', pts: [[BASE.lat, BASE.lng]] }]), { BASE });
   check('점 2개 미만 경로는 무시한다', r8 === null);
 
+  // ── 9) 통합: 스냅이 켜지면 POS() 가 이동하고, 좌표 readout 은 원시값을 유지한다 ──
+  {
+    const ctx2 = await browser.newContext({
+      geolocation: { latitude: 36.375545, longitude: 127.376782, accuracy: 8 },
+      permissions: ['geolocation'],
+    });
+    const p2 = await ctx2.newPage();
+    await p2.goto('file://' + ROOT + '/index.html');
+    // 남북 직선 경로를 주입한 뒤 시작
+    await p2.evaluate(() => {
+      const G = window.__gnssnavi;
+      G.setPaths([{ id: 'p1', name: '남북 직선', pts: [
+        [36.375545 - 50 / 111132, 127.376772],
+        [36.375545 + 50 / 111132, 127.376772],
+      ] }]);
+    });
+    await p2.click('#startBtn');
+    await p2.waitForTimeout(700);
+
+    const st = await p2.evaluate(() => {
+      const G = window.__gnssnavi;
+      const s = G.getState();
+      return { snapped: !!s.snap, pathId: s.snap && s.snap.pathId,
+               posLng: G.POS().lng, rawLng: s.fix.lng };
+    });
+    check('통합: 경로가 있으면 스냅된다', st.snapped === true, `pathId=${st.pathId}`);
+    check('통합: POS() 가 경로 쪽으로 이동한다', st.posLng < st.rawLng,
+      `pos=${st.posLng} raw=${st.rawLng}`);
+    check('통합: 원시 fix 는 보존된다', near(st.rawLng, 127.376782, 0.00002));
+
+    // 좌표 readout(legend)은 스냅되지 않은 원시 좌표여야 한다
+    await p2.click('#bgBtn');
+    await p2.waitForTimeout(300);
+    const legend = (await p2.textContent('#legend')).trim();
+    check('통합: 좌표 readout 은 원시값(스냅 미적용)', legend.includes('127.37678'), legend);
+
+    // 검증 토글로 스냅을 끄면 원위치로 돌아온다
+    await p2.click('#snapBtn');
+    await p2.waitForTimeout(300);
+    const off = await p2.evaluate(() => {
+      const G = window.__gnssnavi;
+      return { snapOn: G.getState().snapOn, posLng: G.POS().lng };
+    });
+    check('통합: 토글을 끄면 스냅이 해제된다', off.snapOn === false && near(off.posLng, 127.376782, 0.00002),
+      `posLng=${off.posLng}`);
+    await ctx2.close();
+  }
+
   await browser.close();
   console.log(failures ? `\n${failures}건 실패` : '\n전부 통과');
   process.exit(failures ? 1 : 0);
