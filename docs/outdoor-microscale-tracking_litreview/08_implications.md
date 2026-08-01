@@ -80,6 +80,16 @@ Zhao et al. (2018)의 "가짜 이동" 필터링도 같은 계열이다.
 
 ---
 
+## 7. 미완 — 본문 확인이 남은 최우선 2편
+
+3라운드(alphaXiv)에서 **우리 두 축을 정면으로 다루는 문헌**을 찾았으나 커넥터가 끊겨 본문을 못 읽었다.
+재연결 시 **이 둘부터** 확인한다.
+
+| 문헌 | 우리 어느 결정에 걸리나 |
+|---|---|
+| *Evaluating Smartphone GNSS Accuracy for **Geofenced** Operations* ([arXiv:2603.26706](https://www.alphaxiv.org/abs/2603.26706)) | 지오펜스 반경·정확도 기준. 규제(6GHz) 맥락이라 **정확도 요건을 엄격히 정량화**했을 가능성 → 우리 ±12m 게이트와 28m 반경의 타당성을 직접 대조할 수 있다 |
+| *Reliable **Heading Tracking** for Pedestrian … Using Commodity Devices* ([arXiv:2410.06400](https://www.alphaxiv.org/abs/2410.06400)) | **진행방향 기반 인접 관 판별(2순위)** 의 직접 선행연구. 초록이 "기존 관성융합·ML 접근의 한계"를 지적하므로, 우리가 GPS course 를 쓰기로 한 선택의 타당성 검증에 쓸 수 있다 |
+
 ## 남은 공백 — 우리가 직접 메워야 할 부분
 
 문헌에서 **과학관 산책로 규모(수백 m, 개활지+반차폐 혼재)에 경로망 제약을 적용한 사례를

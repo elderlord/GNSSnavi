@@ -53,6 +53,18 @@ GNSS 공학 문헌의 다수가 실리는 **IEEE·MDPI(Sensors)·Springer 는 �
 따라서 1라운드 WebSearch 결과(MDPI·Springer 다수)와 **상호보완적으로 읽어야 하며**,
 어느 한쪽도 단독으로 전수 조사가 아니다.
 
+## 3라운드: alphaXiv (2026-08-01)
+
+arXiv 프리프린트 검색. **Scholar Gateway 가 못 덮는 IEEE·MDPI 계열의 프리프린트**를 겨냥.
+
+| # | 질의 | 결과 |
+|---|---|---|
+| X1 | 보행자 GNSS 를 보행로 네트워크로 제약(맵매칭/스냅)해 개선하는 방법, 보행자용 알고리즘·파라미터, 50m 미만 소형 지오펜스 신뢰도 | 12건 |
+
+**한계 (중요)**: 검색 직후 **alphaXiv·Scholar Gateway 커넥터가 모두 끊겨 전문을 읽지 못했다.**
+아래 3라운드 문헌은 **제목·초록 수준**의 기록이며, 수치 인용 없이 "확인 대상"으로만 남긴다.
+커넥터 재연결 시 `get_paper_content`/`answer_pdf_queries` 로 본문 검증이 필요하다.
+
 ## 포화 판단
 
 Q1–Q9 후반부에서 이미 등장한 문헌(sidewalk matching, PDR 계열, geo-trigger 계열)이 반복 출현.

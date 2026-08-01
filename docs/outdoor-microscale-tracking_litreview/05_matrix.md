@@ -56,6 +56,24 @@
 | E4 | Wayfinding and visitor tracking in museums (V&A London) | 박물관 | 하이브리드 측위가 **길찾기·동선추적에 부적합** | 부정적 선례 | WS |
 | E5 | 전시물 관람률·관람시간 분석(국립과천과학관, KCI) / 국립민속박물관 공간구문분석 | 국내 | 관찰·공간구문 기반 | 국내 동선 연구는 측위 기술 기반이 아님 | WS |
 
+## F. 3라운드 arXiv 후보 (제목·초록 수준 — **본문 미확인**)
+
+> 커넥터가 검색 직후 끊겨 전문을 읽지 못했다. **수치를 인용하지 않으며**, 재연결 시 확인할 목록이다.
+> 표기 `AX` = alphaXiv 검색 결과.
+
+| # | 문헌 | 왜 확인해야 하나 | 우선순위 |
+|---|---|---|---|
+| **F1** | *Evaluating Smartphone GNSS Accuracy for Geofenced 6 GHz Operations* (2026-03) [arXiv:2603.26706](https://www.alphaxiv.org/abs/2603.26706) | ★★ **스마트폰 GNSS 정확도를 "지오펜싱 목적"으로 직접 평가**한 문헌. 하위질문 ④ 를 정면으로 다루는 유일한 최신 자료. 6GHz 스펙트럼 규제 맥락이라 **정확도 요건을 규제 수준으로 엄격히** 따졌을 가능성이 높다 | **최우선** |
+| **F2** | *Reliable Heading Tracking for Pedestrian Road Crossing Prediction Using Commodity Devices* (2024-10, Edinburgh·Wisconsin) [arXiv:2410.06400](https://www.alphaxiv.org/abs/2410.06400) | ★★ **일반 소비자 기기로 보행자 진행방향을 안정적으로 추정**하는 문제. "관성센서 융합·기계학습 기반 기존 연구의 한계"를 지적한다고 초록에 명시 → **우리 진행방향 기반 인접 관 판별(2순위)의 직접 선행연구** | **최우선** |
+| F3 | *Indoor Navigation Algorithm Based on a Smartphone IMU and Map Matching* (2021, 연세대) [arXiv:2109.11706](https://www.alphaxiv.org/abs/2109.11706) | PDR + 맵매칭. **국내 연구**라 참조 맥락이 가깝다 | 높음 |
+| F4 | *Accurate Pedestrian Tracking in Urban Canyons: A Multi-Modal Fusion Approach* (2026-01) [arXiv:2601.22406](https://www.alphaxiv.org/abs/2601.22406) | GNSS 열화 환경의 보행자 추적 — 아치 터널 조건과 유사 | 중간 |
+| F5 | *Trajectory Smoothing Using GNSS/PDR Integration Via Factor Graph Optimization in Urban Canyons* (2023) [arXiv:2212.14264](https://www.alphaxiv.org/abs/2212.14264) | 다중경로·NLOS 하에서 궤적 평활화 | 중간 |
+| F6 | *Improved GNSS Positioning in Urban Environments Using a Logistic Error Model* (2026-03) [arXiv:2603.16420](https://www.alphaxiv.org/abs/2603.16420) | 의사거리 오차의 가우시안 가정을 로지스틱으로 대체 — **원시 관측치 필요라 브라우저 적용 불가**하나 오차 모델 이해에 참고 | 낮음 |
+| F7 | *Fusing Bluetooth With PDR: A Floor Plan-Assisted Positioning Approach* (2025) [arXiv:2504.09905](https://www.alphaxiv.org/abs/2504.09905) | BLE 부분은 인프라 전제라 범위 밖. 다만 **평면도를 사전정보로 쓰는 방식**은 경로망 제약과 같은 계열 | 낮음 |
+
+**3라운드 배제**: UWB 융합(2512.10480), 일반 GNSS/IMU 통합(2603.03556·2603.03546),
+자율주행 HD맵(2606.17080), V2X 보행자 충돌회피(2605.18295) — 인프라 전제 또는 차량 도메인.
+
 ## 배제 사례
 
 | 문헌군 | 사유 |
