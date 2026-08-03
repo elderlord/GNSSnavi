@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="color-scheme" content="dark">
+<title>경로망 편집 — GNSS 레이더</title>
+<style>
+  :root{--bg:#0d1117;--fg:#dfe6ff;--acc:#7aa2ff;--ok:#33e1a1;--warn:#ffb454;--err:#ff5d6c;--dim:#7d87a8;}
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);overflow:hidden;
+    font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;-webkit-text-size-adjust:100%;}
+  #cv{display:block;width:100%;height:100%;touch-action:none;}
+  .panel{position:fixed;left:0;right:0;background:rgba(13,17,23,.93);
+    border-top:1px solid rgba(255,255,255,.1);backdrop-filter:blur(8px);}
+  #top{top:0;border-top:0;border-bottom:1px solid rgba(255,255,255,.1);padding:8px 10px;}
+  #bot{bottom:0;padding:8px 10px;max-height:52vh;overflow-y:auto;}
+  .row{display:flex;gap:6px;flex-wrap:wrap;align-items:center;}
+  button{appearance:none;border:1px solid #2b3550;border-radius:8px;padding:8px 11px;
+    font-size:13px;font-weight:600;background:transparent;color:var(--fg);cursor:pointer;touch-action:manipulation;}
+  button.on{background:var(--acc);color:#08101f;border-color:var(--acc);}
+  button:disabled{opacity:.35;}
+  button.sm{padding:6px 9px;font-size:12px;font-weight:500;}
+  select,input[type=text]{background:#0b1120;border:1px solid #2b3550;color:var(--fg);
+    border-radius:8px;padding:7px 8px;font-size:14px;max-width:46vw;}
+  label.file{display:inline-block;}
+  label.file input{display:none;}
+  .hint{color:var(--dim);font-size:11.5px;margin-top:6px;line-height:1.5;}
+  .hint b{color:var(--fg);}
+  pre{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.5;
+    background:#080b14;border:1px solid #202a42;border-radius:8px;padding:9px;margin:7px 0 0;
+    overflow-x:auto;white-space:pre-wrap;word-break:break-all;max-height:30vh;}
+  textarea{width:100%;height:74px;background:#0b1120;border:1px solid #2b3550;color:var(--fg);
+    border-radius:8px;padding:8px;font-size:12px;font-family:ui-monospace,Menlo,monospace;}
+  .tag{display:inline-block;padding:1px 6px;border-radius:5px;font-size:11px;
+    background:rgba(122,162,255,.16);color:var(--acc);}
+  .warn{color:var(--warn);} .ok{color:var(--ok);} .err{color:var(--err);} .dim{color:var(--dim);}
+  .sep{width:100%;height:1px;background:rgba(255,255,255,.08);margin:7px 0;}
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+
+<div id="top" class="panel">
+  <div class="row">
+    <button id="mPan" class="on">✋ 이동</button>
+    <button id="mDraw">✏️ 경로</button>
+    <button id="mDoor">🚪 문</button>
+    <span style="flex:1"></span>
+    <button id="undo" class="sm">되돌리기</button>
+    <button id="fit" class="sm">전체보기</button>
+  </div>
+  <div class="row" id="drawOpts" style="margin-top:7px;display:none">
+    <select id="kind">
+      <option value="">간선 (venue 없음)</option>
+    </select>
+    <input type="text" id="pname" placeholder="경로 이름" style="flex:1">
+    <button id="endPath" class="sm">경로 끝</button>
+  </div>
+  <div class="row" id="doorOpts" style="margin-top:7px;display:none">
+    <select id="doorVenue"></select>
+    <span class="hint" style="margin:0">지도에서 실제 문 위치를 탭하세요</span>
+  </div>
+  <div class="hint" id="status">실측 관 7개를 기준으로 그립니다. 좌표는 <b>VENUES 와 같은 기준계</b>입니다.</div>
+</div>
+
+<div id="bot" class="panel">
+  <div class="row">
+    <button id="tabOut" class="on sm">출력</button>
+    <button id="tabIn" class="sm">불러오기</button>
+    <button id="tabBg" class="sm">배경</button>
+    <span style="flex:1"></span>
+    <button id="copy" class="sm">복사</button>
+  </div>
+
+  <div id="paneOut">
+    <pre id="out">경로를 그리면 여기에 PATHS 스니펫이 나옵니다.</pre>
+    <div id="doorReport"></div>
+  </div>
+
+  <div id="paneIn" style="display:none">
+    <div class="hint">기존 <b>PATHS</b> 배열이나 <b>path.html 원시 로그</b>를 붙여넣으세요.
+      원시 로그는 걸은 궤적으로 겹쳐 그려집니다(편집 대상 아님).</div>
+    <textarea id="imp" placeholder="여기에 붙여넣기"></textarea>
+    <div class="row" style="margin-top:6px">
+      <button id="impPaths" class="sm">PATHS 로 읽기</button>
+      <button id="impTrack" class="sm">궤적으로 읽기</button>
+      <button id="clrTrack" class="sm">궤적 지우기</button>
+    </div>
+  </div>
+
+  <div id="paneBg" style="display:none">
+    <div class="hint">배경 이미지는 <b>이 기기에서만</b> 쓰입니다 — 저장소에 들어가지 않고,
+      출력에도 남지 않습니다. 무엇을 보며 그렸는지는 기록되지 않습니다.<br>
+      불러온 뒤 <b>기준점 2개</b>를 찍으면 실좌표에 정렬됩니다.</div>
+    <div class="row" style="margin-top:6px">
+      <label class="file"><button class="sm" onclick="this.parentNode.querySelector('input').click()">이미지 열기</button>
+        <input type="file" id="bgFile" accept="image/*"></label>
+      <button id="bgRef" class="sm" disabled>기준점 찍기</button>
+      <button id="bgClr" class="sm" disabled>배경 지우기</button>
+      <span id="bgOpacityWrap" class="dim" style="font-size:11.5px">투명도
+        <input type="range" id="bgOpacity" min="10" max="100" value="55" style="width:80px;vertical-align:middle"></span>
+    </div>
+    <div class="hint" id="bgStatus">이미지 없음</div>
+  </div>
+</div>
+
+<script>
+(() => {
+"use strict";
+/* index.html 의 VENUES 와 id/name/좌표를 일치시켜 둔다.
+   여기 좌표는 실측값이다 — 이 도구에서 편집하지 않는다(손그림은 별도 층에 남긴다). */
+const VENUES = [
+  { id:"hall-nature",   name:"자연사관",     lat:36.375797, lng:127.375239, r:30 },
+  { id:"hall-tech",     name:"과학기술관",   lat:36.375857, lng:127.375082, r:30 },
+  { id:"hall-future",   name:"미래기술관",   lat:36.376652, lng:127.374655, r:28 },
+  { id:"hall-nari",     name:"창의나래관",   lat:36.375545, lng:127.376772, r:28 },
+  { id:"hall-children", name:"어린이과학관", lat:36.374686, lng:127.376319, r:28 },
+  { id:"hall-bio",      name:"생물탐구관",   lat:36.377245, lng:127.377449, r:26 },
+  { id:"hall-astro",    name:"천체관",       lat:36.376541, lng:127.375599, r:26 },
+];
+const D2R = Math.PI/180;
+// 기준점: 관들의 중심. 여기서부터 로컬 미터 좌표(x=동, y=북)를 쓴다 — index.html 과 같은 방식.
+const REF = {
+  lat: VENUES.reduce((a,v)=>a+v.lat,0)/VENUES.length,
+  lng: VENUES.reduce((a,v)=>a+v.lng,0)/VENUES.length,
+};
+const MLNG = 111320*Math.cos(REF.lat*D2R), MLAT = 111132;
+const toM  = p => ({ x:(p.lng-REF.lng)*MLNG, y:(p.lat-REF.lat)*MLAT });
+const toLL = v => ({ lat: REF.lat + v.y/MLAT, lng: REF.lng + v.x/MLNG });
+const distM = (a,b) => Math.hypot((b.lng-a.lng)*MLNG, (b.lat-a.lat)*MLAT);
+
+const $ = id => document.getElementById(id);
+const cv = $("cv"), ctx = cv.getContext("2d");
+
+const S = {
+  mode: "pan",
+  view: { cx:0, cy:0, scale:2.2 },      // 화면 중심의 월드 좌표(m), 픽셀/미터
+  paths: [],                            // { id, name, venue, pts:[{lat,lng}] }
+  cur: null,                            // 그리는 중인 경로
+  doors: [],                            // { venueId, lat, lng }
+  tracks: [],                           // [[{lat,lng},…]]
+  bg: null,                             // { img, refs:[{ix,iy,venueId}], T }
+  bgPick: false,
+};
+
+/* ═══════════ 좌표 변환 ═══════════ */
+const w2s = v => ({ x: cv.width/2  + (v.x - S.view.cx)*S.view.scale,
+                    y: cv.height/2 - (v.y - S.view.cy)*S.view.scale });
+const s2w = p => ({ x: S.view.cx + (p.x - cv.width/2)/S.view.scale,
+                    y: S.view.cy - (p.y - cv.height/2)/S.view.scale });
+const llToS = p => w2s(toM(p));
+const sToLL = p => toLL(s2w(p));
+
+/* 배경 이미지: 기준점 2개로 닮음변환(축척·회전·평행이동)을 푼다.
+   지도앱 캡처는 북쪽이 위라 회전이 0에 가깝지만, 기울여 찍어도 잡히도록 회전을 남겨둔다. */
+function solveBg(){
+  const b = S.bg; if(!b || b.refs.length < 2){ if(b) b.T = null; return; }
+  const [p,q] = b.refs;
+  const V1 = VENUES.find(v=>v.id===p.venueId), V2 = VENUES.find(v=>v.id===q.venueId);
+  if(!V1 || !V2 || V1.id===V2.id){ b.T = null; return; }
+  const w1 = toM(V1), w2v = toM(V2);
+  const idx = q.ix-p.ix, idy = q.iy-p.iy;              // 이미지 좌표(아래로 +y)
+  const wdx = w2v.x-w1.x,  wdy = w2v.y-w1.y;           // 월드 좌표(위로 +y)
+  const il = Math.hypot(idx,idy), wl = Math.hypot(wdx,wdy);
+  if(il < 1e-6 || wl < 1e-6){ b.T = null; return; }
+  const s = wl/il;
+  const th = Math.atan2(wdy,wdx) - Math.atan2(-idy,idx);  // 이미지 y축 뒤집어 비교
+  const c = Math.cos(th)*s, sn = Math.sin(th)*s;
+  // 이미지(ix,iy) → 월드(x,y):  x = c*ix + sn*iy + tx ,  y = sn*ix - c*iy + ty
+  const tx = w1.x - (c*p.ix + sn*p.iy);
+  const ty = w1.y - (sn*p.ix - c*p.iy);
+  b.T = { c, sn, tx, ty };
+}
+const img2w = (ix,iy) => { const T=S.bg.T; return { x:T.c*ix+T.sn*iy+T.tx, y:T.sn*ix-T.c*iy+T.ty }; };
+
+/* ═══════════ 렌더 ═══════════ */
+function resize(){
+  const d = window.devicePixelRatio||1;
+  cv.width = cv.clientWidth*d; cv.height = cv.clientHeight*d;
+  ctx.setTransform(1,0,0,1,0,0);
+  draw();
+}
+function grid(){
+  // 화면에 30~120px 간격이 되는 10의 배수 눈금을 고른다
+  const cand=[5,10,20,50,100,200,500];
+  const step = cand.find(m => m*S.view.scale >= 60) || 500;
+  const tl=s2w({x:0,y:0}), br=s2w({x:cv.width,y:cv.height});
+  ctx.lineWidth=1; ctx.strokeStyle="rgba(255,255,255,.055)";
+  ctx.beginPath();
+  for(let x=Math.floor(tl.x/step)*step; x<=br.x; x+=step){ const p=w2s({x,y:0}); ctx.moveTo(p.x,0); ctx.lineTo(p.x,cv.height); }
+  for(let y=Math.floor(br.y/step)*step; y<=tl.y; y+=step){ const p=w2s({x:0,y}); ctx.moveTo(0,p.y); ctx.lineTo(cv.width,p.y); }
+  ctx.stroke();
+  // 축척 막대
+  const d=window.devicePixelRatio||1, px=step*S.view.scale;
+  ctx.strokeStyle="rgba(255,255,255,.5)"; ctx.lineWidth=2*d;
+  const bx=14*d, by=cv.height-14*d;
+  ctx.beginPath(); ctx.moveTo(bx,by); ctx.lineTo(bx+px,by);
+  ctx.moveTo(bx,by-5*d); ctx.lineTo(bx,by+5*d);
+  ctx.moveTo(bx+px,by-5*d); ctx.lineTo(bx+px,by+5*d); ctx.stroke();
+  ctx.fillStyle="rgba(255,255,255,.6)"; ctx.font=`${12*d}px -apple-system,sans-serif`;
+  ctx.textAlign="left"; ctx.fillText(`${step}m`, bx+px+7*d, by+4*d);
+}
+function drawBg(){
+  const b=S.bg; if(!b||!b.img) return;
+  ctx.save(); ctx.globalAlpha = (+$("bgOpacity").value)/100;
+  if(b.T){
+    const o=w2s(img2w(0,0)), ex=w2s(img2w(1,0)), ey=w2s(img2w(0,1));
+    ctx.setTransform(ex.x-o.x, ex.y-o.y, ey.x-o.x, ey.y-o.y, o.x, o.y);
+    ctx.drawImage(b.img,0,0);
+    ctx.setTransform(1,0,0,1,0,0);
+  } else {
+    // 아직 정렬 전 — 화면 중앙에 맞춰 미리보기만
+    const s=Math.min(cv.width/b.img.width, cv.height/b.img.height)*0.8;
+    ctx.drawImage(b.img,(cv.width-b.img.width*s)/2,(cv.height-b.img.height*s)/2,b.img.width*s,b.img.height*s);
+  }
+  ctx.restore();
+  // 찍은 기준점
+  const d=window.devicePixelRatio||1;
+  b.refs.forEach((r,i)=>{
+    if(!b.T) return;
+    const p=w2s(img2w(r.ix,r.iy));
+    ctx.strokeStyle="#ffb454"; ctx.lineWidth=2*d;
+    ctx.beginPath(); ctx.arc(p.x,p.y,9*d,0,7); ctx.stroke();
+    ctx.fillStyle="#ffb454"; ctx.font=`${11*d}px -apple-system,sans-serif`;
+    ctx.textAlign="left"; ctx.fillText(`기준${i+1}`, p.x+12*d, p.y+4*d);
+  });
+}
+function drawVenues(){
+  const d=window.devicePixelRatio||1;
+  for(const v of VENUES){
+    const p=llToS(v);
+    ctx.strokeStyle="rgba(122,162,255,.28)"; ctx.lineWidth=1*d;
+    ctx.beginPath(); ctx.arc(p.x,p.y,v.r*S.view.scale,0,7); ctx.stroke();   // 진입 반경
+    ctx.fillStyle="#7aa2ff";
+    ctx.beginPath(); ctx.arc(p.x,p.y,4.5*d,0,7); ctx.fill();
+    ctx.fillStyle="#dfe6ff"; ctx.font=`600 ${12*d}px -apple-system,sans-serif`;
+    ctx.textAlign="center"; ctx.fillText(v.name, p.x, p.y-10*d);
+  }
+}
+function drawTracks(){
+  const d=window.devicePixelRatio||1;
+  ctx.strokeStyle="rgba(255,180,84,.45)"; ctx.lineWidth=2*d;
+  for(const t of S.tracks){
+    ctx.beginPath();
+    t.forEach((q,i)=>{ const p=llToS(q); i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y); });
+    ctx.stroke();
+  }
+}
+function drawPaths(){
+  const d=window.devicePixelRatio||1;
+  const all = S.cur ? S.paths.concat([S.cur]) : S.paths;
+  for(const path of all){
+    const isCur = path===S.cur;
+    ctx.strokeStyle = path.venue ? "#33e1a1" : "#7aa2ff";
+    ctx.lineWidth = (isCur?3.5:3)*d;
+    ctx.setLineDash(isCur?[7*d,5*d]:[]);
+    ctx.beginPath();
+    path.pts.forEach((q,i)=>{ const p=llToS(q); i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y); });
+    ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = path.venue ? "#33e1a1" : "#7aa2ff";
+    for(const q of path.pts){ const p=llToS(q);
+      ctx.beginPath(); ctx.arc(p.x,p.y,3.2*d,0,7); ctx.fill(); }
+    if(path.pts.length){
+      const p=llToS(path.pts[0]);
+      ctx.fillStyle="rgba(223,230,255,.75)"; ctx.font=`${11*d}px -apple-system,sans-serif`;
+      ctx.textAlign="left"; ctx.fillText(path.name||"(이름없음)", p.x+8*d, p.y-7*d);
+    }
+  }
+}
+function drawDoors(){
+  const d=window.devicePixelRatio||1;
+  for(const dr of S.doors){
+    const v=VENUES.find(x=>x.id===dr.venueId); if(!v) return;
+    const p=llToS(dr), q=llToS(v);
+    ctx.strokeStyle="rgba(255,93,108,.55)"; ctx.lineWidth=1.5*d; ctx.setLineDash([4*d,4*d]);
+    ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(q.x,q.y); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle="#ff5d6c";
+    ctx.beginPath(); ctx.moveTo(p.x,p.y-6*d); ctx.lineTo(p.x+6*d,p.y); ctx.lineTo(p.x,p.y+6*d); ctx.lineTo(p.x-6*d,p.y); ctx.closePath(); ctx.fill();
+    ctx.fillStyle="#ff9aa4"; ctx.font=`${11*d}px -apple-system,sans-serif`;
+    ctx.textAlign="center"; ctx.fillText(`${v.name} 문 (${distM(dr,v).toFixed(0)}m)`, p.x, p.y+18*d);
+  }
+}
+function draw(){
+  ctx.fillStyle="#0d1117"; ctx.fillRect(0,0,cv.width,cv.height);
+  drawBg(); grid(); drawTracks(); drawVenues(); drawPaths(); drawDoors();
+}
+
+/* ═══════════ 입력 ═══════════ */
+let ptrs=new Map(), last=null, pinch=null, moved=0;
+cv.addEventListener("pointerdown", e=>{
+  cv.setPointerCapture(e.pointerId);
+  ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(ptrs.size===2){ const [a,b]=[...ptrs.values()];
+    pinch={d:Math.hypot(a.x-b.x,a.y-b.y), scale:S.view.scale}; }
+  last={x:e.clientX,y:e.clientY}; moved=0;
+});
+cv.addEventListener("pointermove", e=>{
+  if(!ptrs.has(e.pointerId)) return;
+  ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(ptrs.size===2 && pinch){
+    const [a,b]=[...ptrs.values()], nd=Math.hypot(a.x-b.x,a.y-b.y);
+    S.view.scale = Math.max(0.15, Math.min(40, pinch.scale*(nd/pinch.d)));
+    draw(); return;
+  }
+  if(!last) return;
+  const dx=e.clientX-last.x, dy=e.clientY-last.y;
+  moved += Math.hypot(dx,dy);
+  if(S.mode==="pan" || moved>10){
+    const d=window.devicePixelRatio||1;
+    S.view.cx -= dx*d/S.view.scale; S.view.cy += dy*d/S.view.scale;
+    draw();
+  }
+  last={x:e.clientX,y:e.clientY};
+});
+cv.addEventListener("pointerup", e=>{
+  const d=window.devicePixelRatio||1;
+  const tap = moved<=10;
+  ptrs.delete(e.pointerId); if(ptrs.size<2) pinch=null;
+  if(!tap){ last=null; return; }
+  const sp={x:e.clientX*d, y:e.clientY*d};
+  if(S.bgPick){ pickRef(sp); }
+  else if(S.mode==="draw"){ addPoint(sToLL(sp)); }
+  else if(S.mode==="door"){ addDoor(sToLL(sp)); }
+  last=null;
+});
+cv.addEventListener("wheel", e=>{
+  e.preventDefault();
+  S.view.scale = Math.max(0.15, Math.min(40, S.view.scale*(e.deltaY<0?1.12:1/1.12)));
+  draw();
+}, {passive:false});
+
+/* ═══════════ 편집 ═══════════ */
+function addPoint(ll){
+  if(!S.cur) S.cur = { id:"", name:$("pname").value.trim(), venue:$("kind").value||null, pts:[] };
+  S.cur.pts.push(ll);
+  render();
+}
+function endPath(){
+  if(S.cur && S.cur.pts.length>=2){
+    S.cur.venue = $("kind").value||null;
+    S.cur.name  = $("pname").value.trim() || (S.cur.venue?"지선":"간선");
+    S.cur.id    = S.cur.venue ? "spur-"+S.cur.venue.replace("hall-","")
+                              : "main-"+(S.paths.filter(p=>!p.venue).length+1);
+    S.paths.push(S.cur);
+  }
+  S.cur=null; $("pname").value=""; render();
+}
+function addDoor(ll){
+  const vid=$("doorVenue").value;
+  S.doors = S.doors.filter(d=>d.venueId!==vid);
+  S.doors.push({ venueId:vid, lat:ll.lat, lng:ll.lng });
+  render();
+}
+function undo(){
+  if(S.bgPick && S.bg && S.bg.refs.length){ S.bg.refs.pop(); solveBg(); }
+  else if(S.cur && S.cur.pts.length) S.cur.pts.pop();
+  else if(S.paths.length) S.paths.pop();
+  else if(S.doors.length) S.doors.pop();
+  render();
+}
+function fit(){
+  const pts=[...VENUES.map(toM), ...S.paths.flatMap(p=>p.pts.map(toM)), ...S.tracks.flat().map(toM)];
+  if(!pts.length) return;
+  const xs=pts.map(p=>p.x), ys=pts.map(p=>p.y);
+  const minx=Math.min(...xs),maxx=Math.max(...xs),miny=Math.min(...ys),maxy=Math.max(...ys);
+  S.view.cx=(minx+maxx)/2; S.view.cy=(miny+maxy)/2;
+  const pad=60*(window.devicePixelRatio||1);
+  S.view.scale=Math.max(0.15,Math.min(40,
+    Math.min((cv.width-pad)/Math.max(1,maxx-minx),(cv.height-pad)/Math.max(1,maxy-miny))));
+  draw();
+}
+
+/* ═══════════ 출력 ═══════════ */
+function snippet(){
+  if(!S.paths.length) return "경로를 그리면 여기에 PATHS 스니펫이 나옵니다.";
+  const esc = s => String(s).replace(/[\\"]/g, m => "\\"+m);
+  const body = S.paths.map(p=>{
+    let L=0; for(let i=1;i<p.pts.length;i++) L+=distM(p.pts[i-1],p.pts[i]);
+    return `  { id:"${esc(p.id)}", name:"${esc(p.name)}",${p.venue?` venue:"${p.venue}",`:""}\n`
+      + `    pts:[ ${p.pts.map(q=>`[${q.lat.toFixed(6)},${q.lng.toFixed(6)}]`).join(",\n          ")} ] },`
+      + `   // ${p.pts.length}점 · ${L.toFixed(0)}m`;
+  }).join("\n");
+  return `const PATHS = [\n${body}\n];`;
+}
+function doorReport(){
+  if(!S.doors.length) return "";
+  const rows = S.doors.map(d=>{
+    const v=VENUES.find(x=>x.id===d.venueId);
+    const dist=distM(d,v);
+    const y=(d.lat-v.lat)*MLAT, x=(d.lng-v.lng)*MLNG;
+    const brg=((Math.atan2(x,y)*180/Math.PI)+360)%360;
+    const cls = dist>25?"err":dist>12?"warn":"ok";
+    return `<div style="margin:3px 0"><b>${v.name}</b> — 실측 좌표에서 <span class="${cls}">${dist.toFixed(1)}m</span>`
+      + ` <span class="dim">(방위 ${brg.toFixed(0)}°)</span><br>`
+      + `<span class="dim" style="font-family:ui-monospace,monospace;font-size:11px">문 ${d.lat.toFixed(6)}, ${d.lng.toFixed(6)}</span></div>`;
+  }).join("");
+  let pair="";
+  const dn=S.doors.find(d=>d.venueId==="hall-nature"), dt=S.doors.find(d=>d.venueId==="hall-tech");
+  if(dn&&dt){
+    const sep=distM(dn,dt);
+    // 두 문을 잇는 벡터를 '가장 가까운 간선' 방향 기준으로 종/횡 분해한다.
+    const mains=S.paths.filter(p=>!p.venue&&p.pts.length>=2);
+    let along=null,across=null,corr=null;
+    if(mains.length){
+      const m=mains[0], a=toM(m.pts[0]), b=toM(m.pts[m.pts.length-1]);
+      corr=Math.atan2(b.x-a.x,b.y-a.y);
+      const y=(dt.lat-dn.lat)*MLAT, x=(dt.lng-dn.lng)*MLNG;
+      const th=Math.atan2(x,y)-corr;
+      along=Math.abs(sep*Math.cos(th)); across=Math.abs(sep*Math.sin(th));
+    }
+    pair = `<div class="sep"></div><div><b>과학기술관 ↔ 자연사관 문 간격 ${sep.toFixed(1)}m</b>`
+      + (along!=null
+        ? `<br><span class="dim">간선 방향 기준 — 복도 따라 <b>${along.toFixed(1)}m</b> · 가로질러 <b>${across.toFixed(1)}m</b></span>`
+          + `<br><span class="${across>=8?"ok":"warn"}" style="font-size:11.5px">`
+          + (across>=8
+             ? "가로 간격이 충분합니다 — 지선 스냅으로 구분할 수 있습니다."
+             : "가로 간격이 좁습니다 — 스냅은 횡방향만 제약하므로 지선으로는 구분이 어렵습니다. 문 앞 최근접 판정에 의존하는 편이 낫습니다.")
+          + `</span>`
+        : `<br><span class="dim">간선을 하나 그리면 복도 방향 기준으로 종/횡 분해해 드립니다.</span>`)
+      + `</div>`;
+  }
+  return `<div class="sep"></div><div class="hint" style="margin:0"><b>실제 문 위치</b>
+    <span class="dim">— VENUES 는 건드리지 않습니다. 아래는 참고용 기록입니다.</span></div>` + rows + pair;
+}
+function render(){
+  $("out").textContent = snippet();
+  $("doorReport").innerHTML = doorReport();
+  const n=S.cur?S.cur.pts.length:0;
+  let L=0; if(S.cur) for(let i=1;i<S.cur.pts.length;i++) L+=distM(S.cur.pts[i-1],S.cur.pts[i]);
+  $("status").innerHTML = S.bgPick
+    ? `배경 기준점을 찍는 중 — 이미지 위에서 <b>${(S.bg?S.bg.refs.length:0)+1}번째</b> 기준 위치를 탭하세요.`
+    : S.mode==="draw"
+      ? (n ? `그리는 중 — <b>${n}점 · ${L.toFixed(0)}m</b>. 끝나면 <b>경로 끝</b>을 누르세요.`
+           : `지도를 탭해 경로를 그립니다. 관으로 이어지는 <b>지선</b>은 위에서 관을 고르세요.`)
+      : S.mode==="door"
+        ? `실제 문 위치를 탭하세요. 실측 좌표와의 거리가 아래에 나옵니다.`
+        : `실측 관 7개를 기준으로 그립니다. 좌표는 <b>VENUES 와 같은 기준계</b>입니다.`;
+  draw();
+}
+
+/* ═══════════ 불러오기 ═══════════ */
+function parsePaths(txt){
+  // { id:"…", name:"…", venue:"…", pts:[[lat,lng],…] } 블록을 관대하게 읽는다
+  const out=[]; const re=/\{[^{}]*\}/g; let m;
+  while((m=re.exec(txt))){
+    const blk=m[0];
+    if(!/pts\s*:/.test(blk)) continue;
+    const id=(blk.match(/id\s*:\s*"([^"]*)"/)||[])[1]||"";
+    const name=(blk.match(/name\s*:\s*"([^"]*)"/)||[])[1]||"";
+    const venue=(blk.match(/venue\s*:\s*"([^"]*)"/)||[])[1]||null;
+    // 좌표쌍은 소수점을 요구해 pts:[ 의 여는 대괄호와 헷갈리지 않게 한다
+    const pts=[...blk.matchAll(/\[\s*(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)\s*\]/g)]
+      .map(p=>({lat:+p[1],lng:+p[2]})).filter(p=>Number.isFinite(p.lat)&&Number.isFinite(p.lng));
+    if(pts.length>=2) out.push({id,name,venue,pts});
+  }
+  return out;
+}
+function parseTrack(txt){
+  // path.html 원시 로그: "t lat lng acc alt Δ" — 주석(#)은 건너뛴다
+  const pts=[];
+  for(const line of txt.split("\n")){
+    if(!line.trim() || line.trim().startsWith("#")) continue;
+    const a=line.trim().split(/\s+/).map(Number);
+    if(a.length>=3 && Number.isFinite(a[1]) && Number.isFinite(a[2])
+       && Math.abs(a[1])<=90 && Math.abs(a[2])<=180) pts.push({lat:a[1],lng:a[2]});
+  }
+  // 기록 초반 튐 제거: 보행 1초에 10m 이상은 불가능하므로 버린다.
+  // 비교 대상은 '직전 원본'이 아니라 '마지막으로 채택한 점'이어야 한다 —
+  // 원본과 비교하면 튐 하나가 그 뒤 정상 샘플까지 연쇄로 끌고 나간다.
+  // 다만 기록 시작부터 튀는 경우가 있어, 연속 3회 거부되면 그 자리에서 재기준을 잡는다.
+  const out=[]; let rej=0;
+  for(const p of pts){
+    if(!out.length || rej>=3 || distM(out[out.length-1],p)<=10){ out.push(p); rej=0; }
+    else rej++;
+  }
+  return out;
+}
+
+/* ═══════════ 배경 ═══════════ */
+function pickRef(sp){
+  const b=S.bg; if(!b) return;
+  let ix,iy;
+  if(b.T){ // 이미 정렬됨 — 화면점을 이미지 좌표로 역변환
+    const w=s2w(sp), T=b.T, det=-(T.c*T.c+T.sn*T.sn);
+    const X=w.x-T.tx, Y=w.y-T.ty;
+    ix=(-T.c*X - T.sn*Y)/det; iy=(-T.sn*X + T.c*Y)/det;
+  } else {  // 미리보기 배치 기준으로 역산
+    const s=Math.min(cv.width/b.img.width, cv.height/b.img.height)*0.8;
+    ix=(sp.x-(cv.width-b.img.width*s)/2)/s; iy=(sp.y-(cv.height-b.img.height*s)/2)/s;
+  }
+  const vid = prompt("이 지점은 어느 관입니까?\n\n" +
+    VENUES.map((v,i)=>`${i+1}. ${v.name}`).join("\n") + "\n\n번호를 입력하세요");
+  const n=parseInt(vid,10);
+  if(!(n>=1 && n<=VENUES.length)) return;
+  b.refs.push({ ix, iy, venueId:VENUES[n-1].id });
+  if(b.refs.length>2) b.refs.shift();
+  solveBg();
+  if(b.T){ S.bgPick=false; $("bgRef").classList.remove("on"); fit(); }
+  bgStatus(); render();
+}
+function bgStatus(){
+  const b=S.bg;
+  $("bgStatus").innerHTML = !b||!b.img ? "이미지 없음"
+    : b.T ? `<span class="ok">정렬됨</span> — 기준점 ${b.refs.length}개. 다시 찍으면 갱신됩니다.`
+          : `이미지 불러옴 — <b>기준점 2개</b>를 찍어야 실좌표에 맞습니다 (현재 ${b.refs.length}개).`;
+  $("bgRef").disabled = !b||!b.img; $("bgClr").disabled = !b||!b.img;
+}
+
+/* ═══════════ UI 배선 ═══════════ */
+for(const v of VENUES){
+  $("kind").insertAdjacentHTML("beforeend", `<option value="${v.id}">지선 → ${v.name}</option>`);
+  $("doorVenue").insertAdjacentHTML("beforeend", `<option value="${v.id}">${v.name}</option>`);
+}
+function setMode(m){
+  if(S.mode==="draw" && m!=="draw") endPath();
+  S.mode=m; S.bgPick=false; $("bgRef").classList.remove("on");
+  for(const [id,mm] of [["mPan","pan"],["mDraw","draw"],["mDoor","door"]])
+    $(id).classList.toggle("on", m===mm);
+  $("drawOpts").style.display = m==="draw"?"flex":"none";
+  $("doorOpts").style.display = m==="door"?"flex":"none";
+  render();
+}
+$("mPan").onclick=()=>setMode("pan");
+$("mDraw").onclick=()=>setMode("draw");
+$("mDoor").onclick=()=>setMode("door");
+$("endPath").onclick=endPath;
+$("undo").onclick=undo;
+$("fit").onclick=fit;
+$("kind").onchange=()=>{ if(S.cur) S.cur.venue=$("kind").value||null; render(); };
+$("pname").oninput=()=>{ if(S.cur) S.cur.name=$("pname").value.trim(); render(); };
+
+for(const [btn,pane] of [["tabOut","paneOut"],["tabIn","paneIn"],["tabBg","paneBg"]]){
+  $(btn).onclick=()=>{
+    for(const [b,p] of [["tabOut","paneOut"],["tabIn","paneIn"],["tabBg","paneBg"]]){
+      $(b).classList.toggle("on", b===btn); $(p).style.display = p===pane?"block":"none";
+    }
+  };
+}
+$("copy").onclick=async()=>{
+  try{ await navigator.clipboard.writeText($("out").textContent);
+    $("copy").textContent="복사됨 ✓"; setTimeout(()=>$("copy").textContent="복사",1400); }
+  catch{ const r=document.createRange(); r.selectNode($("out"));
+    getSelection().removeAllRanges(); getSelection().addRange(r); }
+};
+$("impPaths").onclick=()=>{
+  const got=parsePaths($("imp").value);
+  if(!got.length){ alert("PATHS 형식을 찾지 못했습니다."); return; }
+  S.paths.push(...got); $("imp").value=""; fit(); render();
+};
+$("impTrack").onclick=()=>{
+  const got=parseTrack($("imp").value);
+  if(got.length<2){ alert("좌표를 찾지 못했습니다. path.html 원시 로그를 붙여넣으세요."); return; }
+  S.tracks.push(got); $("imp").value=""; fit(); render();
+};
+$("clrTrack").onclick=()=>{ S.tracks=[]; render(); };
+$("bgFile").onchange=e=>{
+  const f=e.target.files&&e.target.files[0]; if(!f) return;
+  const url=URL.createObjectURL(f), im=new Image();
+  im.onload=()=>{ S.bg={img:im, refs:[], T:null}; URL.revokeObjectURL(url); bgStatus(); render(); };
+  im.onerror=()=>{ alert("이미지를 읽지 못했습니다."); URL.revokeObjectURL(url); };
+  im.src=url;
+};
+$("bgRef").onclick=()=>{ S.bgPick=!S.bgPick; $("bgRef").classList.toggle("on",S.bgPick); render(); };
+$("bgClr").onclick=()=>{ S.bg=null; S.bgPick=false; bgStatus(); render(); };
+$("bgOpacity").oninput=draw;
+
+window.addEventListener("resize", resize);
+resize(); fit(); bgStatus(); render();
+
+// 테스트 seam (index.html 과 같은 방식)
+window.__gnssplan = {
+  getState:()=>S, VENUES, toM, toLL, distM,
+  parsePaths, parseTrack, snippet:()=>snippet(),
+  addPointLL:(ll)=>addPoint(ll), endPath, addDoorAt:(vid,ll)=>{ $("doorVenue").value=vid; addDoor(ll); },
+  setMode,
+};
+})();
+</script>
+</body>
+</html>
