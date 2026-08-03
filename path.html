@@ -135,14 +135,16 @@ function render(curAcc){
   const a = typeof curAcc === "number" ? curAcc : (pts.length ? pts[pts.length-1].acc : null);
   if(a != null) $("acc").innerHTML = `<span class="${a<=PATH_MAX?'good':'bad'}">±${a.toFixed(0)}m</span>`;
   if(!pts.length) return;
-  let L=0; for(let i=1;i<pts.length;i++) L+=distM(pts[i-1], pts[i]);
+  // 기록 시작 직후 측위가 튀면 수십 m 점프가 섞인다. 보행 중 1샘플에 10m 이상은
+  // 물리적으로 불가능하므로 길이 합산에서만 뺀다 — 원시 로그 자체는 손대지 않는다.
+  let L=0; for(let i=1;i<pts.length;i++){ const d=distM(pts[i-1], pts[i]); if(d<=10) L+=d; }
   $("len").textContent = `${L.toFixed(0)} m`;
 
   const s = simplify(pts, EPS_M);
   $("simp").textContent = `${s.length}개`;
   // 채택 샘플 정확도의 중앙값. SNAP.PATH_ERR 을 가정(8m)이 아니라 실측으로 정하는 근거다.
   const accs = pts.map(p=>p.acc).sort((x,y)=>x-y);
-  const accMed = accs[accs.length>>1];
+  const accMed = Math.round(accs[accs.length>>1]);
 
   const venue = $("kind").value;
   // 스니펫은 index.html 에 붙여넣을 JS 문자열 리터럴이다. 따옴표·역슬래시가 든 이름을
