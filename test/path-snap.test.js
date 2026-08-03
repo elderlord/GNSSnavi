@@ -42,8 +42,13 @@ const near = (a, b, tol) => Math.abs(a - b) <= tol;
   check('수직 10m 떨어진 점의 스냅 거리는 10m', r1 && near(r1.dist, 10, 0.5), `dist=${r1 && r1.dist.toFixed(2)}`);
   check('경로 id 를 반환한다', r1 && r1.pathId === 'p1');
 
-  // ── 2) 가중 보간: acc=8, PATH_ERR=8 이면 w=0.5 → 절반만 끌어온다 ──
-  check('가중치 w 는 acc/(acc+PATH_ERR)', r1 && near(r1.w, 0.5, 0.01), `w=${r1 && r1.w.toFixed(3)}`);
+  // ── 2) 가중 보간: w = min(MAX_W, acc/(acc+PATH_ERR)) ──
+  // 기대값을 숫자로 박지 않고 SNAP 에서 유도한다. PATH_ERR 은 현장 실측으로 조정되는
+  // 값이라(초안 8 → 2026-08-03 실측 4), 박아 두면 조정할 때마다 테스트가 헛돈다.
+  const SNAP = await page.evaluate(() => ({ ...window.__gnssnavi.SNAP }));
+  const wExp = Math.min(SNAP.MAX_W, 8 / (8 + SNAP.PATH_ERR));
+  check('가중치 w 는 min(MAX_W, acc/(acc+PATH_ERR))', r1 && near(r1.w, wExp, 0.01),
+    `w=${r1 && r1.w.toFixed(3)} 기대=${wExp.toFixed(3)} (PATH_ERR=${SNAP.PATH_ERR})`);
   const moved1 = await page.evaluate(({ BASE, r1 }) => {
     const G = window.__gnssnavi;
     const fix = { lat: BASE.lat, lng: BASE.lng + 10 / (111320 * Math.cos(BASE.lat * Math.PI / 180)) };
@@ -51,7 +56,9 @@ const near = (a, b, tol) => Math.abs(a - b) <= tol;
     const v = G.toLocalM({ lat: r1.lat, lng: r1.lng }, { lat: BASE.lat, lng: BASE.lng });
     return Math.abs(v.x);
   }, { BASE, r1 });
-  check('w=0.5 이면 경로까지 남은 거리가 5m', near(moved1, 5, 0.5), `남은거리=${moved1.toFixed(2)}m`);
+  // 10m 떨어진 점을 w 만큼 끌어왔으니 경로까지 10*(1-w) 가 남아야 한다
+  check('스냅 후 경로까지 남은 거리는 10×(1-w)', near(moved1, 10 * (1 - wExp), 0.5),
+    `남은거리=${moved1.toFixed(2)}m 기대=${(10 * (1 - wExp)).toFixed(2)}m`);
 
   // ── 3) 선분 밖으로 벗어난 점은 끝점으로 스냅된다 ──
   const r3 = await page.evaluate(({ BASE }) => {
@@ -67,7 +74,8 @@ const near = (a, b, tol) => Math.abs(a - b) <= tol;
   check('선분 밖의 점은 끝점 기준 거리(5m)', r3 && near(r3.dist, 5, 0.5), `dist=${r3 && r3.dist.toFixed(2)}`);
 
   // ── 4) 허용 거리를 넘으면 스냅하지 않는다 ──
-  // acc=8 → tol = min(1.5*hypot(8,8), 25) = 16.97m. 30m 떨어지면 null.
+  // acc=8 → tol = min(K_TOL*hypot(8, PATH_ERR), SNAP_MAX). PATH_ERR=4 면 13.4m,
+  // 초안 8 이었어도 17.0m 라 어느 쪽이든 30m 떨어지면 null 이다.
   const r4 = await page.evaluate(({ BASE }) => {
     const G = window.__gnssnavi;
     const paths = [{ id: 'p1', name: '남북 직선', pts: [
@@ -77,7 +85,7 @@ const near = (a, b, tol) => Math.abs(a - b) <= tol;
     const fix = { lat: BASE.lat, lng: BASE.lng + 30 / (111320 * Math.cos(BASE.lat * Math.PI / 180)) };
     return G.snapToPaths(fix, 8, paths);
   }, { BASE });
-  check('허용 거리(약 17m) 초과 시 null', r4 === null, `r4=${JSON.stringify(r4)}`);
+  check('허용 거리 초과 시 null', r4 === null, `r4=${JSON.stringify(r4)}`);
 
   // ── 5) SNAP_MAX 절대 상한: 정확도가 아무리 나빠도 25m 초과는 스냅 안 함 ──
   const r5 = await page.evaluate(({ BASE }) => {
