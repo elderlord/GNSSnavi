@@ -80,11 +80,13 @@ async function scenario(browser, { pos, acc }) {
   //   이미 inside 였으면 그 플래그가 남아, 그 관은 다시는 ready 후보로 못 들어간다
   //   (ready 는 !st.inside 분기에서만 채워짐). 두 관이 동시에 inside 가 되는 순간
   //   ready 는 영원히 비고, 표시는 세션당 딱 한 번만 바뀐다.
-  //   과학기술관(r=30) ↔ 미래기술관(r=28) 은 14.1m 간격이라 이탈반경(±8m 기준 약 47m)
+  //   과학기술관(r=30) ↔ 자연사관(r=30) 은 15.6m 간격이라 이탈반경(±8m 기준 약 49m)
   //   안에서 서로 절대 벗어나지 않으므로, 관람객은 부지를 통째로 떠나야만 복구된다.
+  //   이 쌍은 2026-08-03 현장 실측(각 ±6m / ±7m)으로 확인된 실제 중첩 쌍이다 —
+  //   볼트러스 아치 아래에서 두 입구가 마주본다.
   {
-    const TECH   = { latitude: 36.376690, longitude: 127.374720, accuracy: 8 };  // 과학기술관
-    const FUTURE = { latitude: 36.376770, longitude: 127.374598, accuracy: 8 };  // 미래기술관
+    const TECH   = { latitude: 36.375857, longitude: 127.375082, accuracy: 8 };  // 과학기술관
+    const NATURE = { latitude: 36.375797, longitude: 127.375239, accuracy: 8 };  // 자연사관
     const ctx = await browser.newContext({
       viewport: { width: 414, height: 896 },
       geolocation: TECH, permissions: ['geolocation'],
@@ -107,14 +109,14 @@ async function scenario(browser, { pos, acc }) {
 
     await page.waitForTimeout(4200);                    // dwell 3초 + 여유
     const s1 = await shown();
-    await walkTo(FUTURE); await page.waitForTimeout(4200);
+    await walkTo(NATURE); await page.waitForTimeout(4200);
     const s2 = await shown();
     await walkTo(TECH);   await page.waitForTimeout(5200);
     const s3 = await shown();
     await ctx.close();
 
     check('A→B→A ①: 과학기술관 앞에 서면 과학기술관', s1 === '과학기술관', `표시=${s1}`);
-    check('A→B→A ②: 미래기술관으로 이동하면 미래기술관', s2 === '미래기술관', `표시=${s2}`);
+    check('A→B→A ②: 자연사관으로 이동하면 자연사관', s2 === '자연사관', `표시=${s2}`);
     check('A→B→A ③: 과학기술관으로 돌아오면 다시 과학기술관', s3 === '과학기술관',
       `${s1} → ${s2} → ${s3}`);
     check('A→B→A: 콘솔 에러 없음', errs.length === 0, errs.join(';'));

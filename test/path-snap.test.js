@@ -166,11 +166,13 @@ const near = (a, b, tol) => Math.abs(a - b) <= tol;
 
   // ── 10) 인접 두 관 중 스냅된 지선의 관이 선택된다 ──
   // 이 테스트는 '반경이 겹치는 두 관'이 실제로 존재해야 의미가 있다.
-  // 현재 VENUES 에서 겹치는 쌍은 hall-tech(과학기술관, r=30) ↔ hall-future(미래기술관, r=28)
-  // 뿐이다(거리 14.1m). 두 관의 좌표가 재측정되어 더 이상 겹치지 않게 되면
-  // 아래 (b) 가 실패하며, 그때는 겹치는 다른 쌍으로 시나리오를 옮겨야 한다.
+  // 2026-08-03 현장 실측(각 ±6m / ±7m) 결과 겹치는 쌍은
+  // hall-tech(과학기술관, r=30) ↔ hall-nature(자연사관, r=30) 뿐이다(거리 15.6m).
+  // 두 입구는 볼트러스 아치 아래에서 마주보고 있어, 좌표가 아무리 정확해도
+  // 반경 판정으로는 구분되지 않는다 — 지선이 필요한 이유가 이 쌍이다.
+  // 좌표가 재측정되어 겹침이 사라지면 아래 (a) 가 먼저 실패한다.
   {
-    const AT = { latitude: 36.376690, longitude: 127.374720, accuracy: 8 };  // 과학기술관 좌표
+    const AT = { latitude: 36.375857, longitude: 127.375082, accuracy: 8 };  // 과학기술관 좌표
 
     // (a) 경로가 없을 때 무엇이 열리는지 — 판별 이전의 기준선
     const ctxA = await browser.newContext({ geolocation: AT, permissions: ['geolocation'] });
@@ -187,14 +189,14 @@ const near = (a, b, tol) => Math.abs(a - b) <= tol;
     check('  기준선: 경로가 없으면 과학기술관이 열린다(두 관이 겹쳐 있음)',
       baseline === '과학기술관', `baseline=${baseline}`);
 
-    // (b) 미래기술관 지선을 주면 미래기술관이 열려야 한다
+    // (b) 자연사관 지선을 주면 자연사관이 열려야 한다
     const ctxB = await browser.newContext({ geolocation: AT, permissions: ['geolocation'] });
     const pB = await ctxB.newPage();
     await pB.goto('file://' + ROOT + '/index.html');
     await pB.evaluate(() => {
       window.__gnssnavi.setPaths([{
-        id: 'spur-future', name: '미래기술관 지선', venue: 'hall-future',
-        pts: [[36.376770, 127.374600], [36.376780, 127.374610]],
+        id: 'spur-nature', name: '자연사관 지선', venue: 'hall-nature',
+        pts: [[36.375838, 127.375132], [36.375797, 127.375239]],
       }]);
     });
     await pB.click('#startBtn');
@@ -204,7 +206,7 @@ const near = (a, b, tol) => Math.abs(a - b) <= tol;
       document.getElementById('indoor').classList.contains('show'));
     await ctxB.close();
 
-    check('지선 스냅이 관 판별을 결정한다', shown && withSpur === '미래기술관',
+    check('지선 스냅이 관 판별을 결정한다', shown && withSpur === '자연사관',
       `경로없음→${baseline} / 지선있음→${withSpur} (shown=${shown})`);
   }
 
@@ -213,15 +215,15 @@ const near = (a, b, tol) => Math.abs(a - b) <= tol;
   // 스냅·방향 우선순위를 건너뛰고 화면을 덮어쓰던 결함의 회귀 테스트.
   {
     const ctxF = await browser.newContext({
-      geolocation: { latitude: 36.376690, longitude: 127.374720, accuracy: 8 },
+      geolocation: { latitude: 36.375857, longitude: 127.375082, accuracy: 8 },
       permissions: ['geolocation'],
     });
     const pF = await ctxF.newPage();
     await pF.goto('file://' + ROOT + '/index.html');
     await pF.evaluate(() => {
       window.__gnssnavi.setPaths([{
-        id: 'spur-future', name: '미래기술관 지선', venue: 'hall-future',
-        pts: [[36.376770, 127.374600], [36.376780, 127.374610]],
+        id: 'spur-nature', name: '자연사관 지선', venue: 'hall-nature',
+        pts: [[36.375838, 127.375132], [36.375797, 127.375239]],
       }]);
     });
     await pF.click('#startBtn');
@@ -231,7 +233,7 @@ const near = (a, b, tol) => Math.abs(a - b) <= tol;
     await pF.waitForTimeout(6000);
     const later = (await pF.textContent('#indoorName')).trim();
     check('정지 상태에서 판별 결과가 유지된다',
-      first === '미래기술관' && later === '미래기술관',
+      first === '자연사관' && later === '자연사관',
       `4.2s→${first} / 10.2s→${later}`);
     await ctxF.close();
   }

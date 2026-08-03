@@ -137,12 +137,12 @@ const SITE_CENTER = { lat: 36.376600, lng: 127.374500 }; // ★ 부지 중심 (�
 // 실내 진입 시 약도 표시 우선순위:  floors[] (층별)  >  mapImage (단일)  >  자체 부지 도식 하이라이트
 //   floors: [{ label:"1F", img:"maps/xxx-1f.png" }, ...]  ← 층 구분(수동 탭). 실내는 측위가 없어 자동 층감지 불가.
 const VENUES = [
-  { id:"hall-nature",   name:"자연사관",     lat:36.376960, lng:127.373160, radiusIn:30, // S1 중앙 서
+  { id:"hall-nature",   name:"자연사관",     lat:36.375797, lng:127.375239, radiusIn:30, // ✔확정 2026-08-03 위성락 ±7m (채택 37, 산포 0.5m · diag.html 60초 로그의 중앙값) — 과학기술관과 15.6m
     floors:[ {label:"1층",img:"maps/hall-nature-1f.png"}, {label:"2층",img:"maps/hall-nature-2f.png"} ] },
-  { id:"hall-tech",     name:"과학기술관",   lat:36.376690, lng:127.374720, radiusIn:30, // N1 중앙
+  { id:"hall-tech",     name:"과학기술관",   lat:36.375857, lng:127.375082, radiusIn:30, // ✔확정 2026-08-03 위성락 ±6m (채택 35, 산포 0.7m · diag.html 60초 로그의 중앙값) — 자연사관과 15.6m, 볼트러스 아치 아래에서 마주봄
     floors:[ {label:"지하1층",img:"maps/hall-tech-b1f.png"}, {label:"1층",main:true,img:"maps/hall-tech-1f.png"},
              {label:"중층",img:"maps/hall-tech-1mf.png"}, {label:"2층",img:"maps/hall-tech-2f.png"} ] },
-  { id:"hall-future",   name:"미래기술관",   lat:36.376770, lng:127.374598, radiusIn:28, // 중앙 북 ⚠임시값 — ±22m 네트워크 측위(기준 ±12m 미달), 재측정 필요
+  { id:"hall-future",   name:"미래기술관",   lat:36.376652, lng:127.374655, radiusIn:28, // ✔확정 2026-08-03 위성락 대표 ±7m (양호 31/31, 최고 ±6m, 산포 1.1m · collect.html) — 과학기술관과 96.3m
     floors:[ {label:"1층",img:"maps/hall-future-1f.png"}, {label:"2층",img:"maps/hall-future-2f.png"} ] },
   { id:"hall-nari",     name:"창의나래관",   lat:36.375545, lng:127.376772, radiusIn:28, // ✔확정 2026-07-31 위성락 ±8m (채택 28/34, 산포 0.6m)
     floors:[ {label:"1층",img:"maps/hall-nari-1f.png"}, {label:"2층",img:"maps/hall-nari-2f.png"}, {label:"3층",img:"maps/hall-nari-3f.png"} ] },
