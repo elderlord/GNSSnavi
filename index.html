@@ -211,10 +211,6 @@ const SITE_SHAPES = [
     pts:[ [36.375282,127.375407],[36.375239,127.376100],[36.374676,127.376063],
           [36.374685,127.375856],[36.374820,127.375869],[36.374831,127.375660],
           [36.374929,127.375545],[36.375104,127.375550],[36.375114,127.375388] ] },
-  // 원형 — 중심+반지름(m)
-  { name:"생물탐구관", c:[36.377455,127.376856], r:22.6 },   // 문이 외벽에서 2m — 일치
-  { name:"천체관",     c:[36.376809,127.375399], r:13.6 },   // ⚠ 실측 좌표가 34.8m, 문이 9m 밖.
-                                                             //   지도의 '천체관측소' 돔을 그린 것일 수 있다.
 ];
 
 /* 지오펜스 히스테리시스 파라미터 (§4.2) */
@@ -446,6 +442,7 @@ function draw(now){
   ctx.fillStyle=g; ctx.beginPath(); ctx.arc(0,0,RR,0,7); ctx.fill();
 
   // 동심원 링 (실거리 → 스케일 반경)
+  const ringRects=[];   // 마커 라벨이 피해야 할 자리
   ctx.lineWidth=1;
   for(const m of RING_M){
     const r = distToNorm(m)*RR;
@@ -453,7 +450,9 @@ function draw(now){
     ctx.beginPath(); ctx.arc(0,0,r,0,7); ctx.stroke();
     // 거리 눈금은 45° 방향(마커 밀집 축인 상단 회피)에 표기
     ctx.fillStyle="rgba(79,138,112,.85)"; ctx.font="10px ui-monospace,monospace";
-    ctx.fillText(m+"m", r*0.707+2, -r*0.707);
+    const rl=m+"m", rw=ctx.measureText(rl).width;
+    ctx.fillText(rl, r*0.707+2, -r*0.707);
+    ringRects.push({x:r*0.707+2, y:-r*0.707-9, w:rw, h:12});
   }
   // 내부/외부 경계 강조는 150m 링이 담당
 
@@ -488,8 +487,10 @@ function draw(now){
   ctx.fillStyle="#eaffff"; ctx.beginPath(); ctx.arc(0,0,4,0,7); ctx.fill();
   ctx.strokeStyle="rgba(46,255,166,.6)"; ctx.beginPath(); ctx.arc(0,0,7,0,7); ctx.stroke();
 
-  // 마커
+  // 마커 — 도트를 먼저 다 찍고, 라벨은 겹치지 않게 두 번째 패스에서 놓는다.
+  // 인접한 관(과학기술관·자연사관은 15.6m)은 방위가 거의 같아 라벨이 포개진다.
   if(state.fix){
+    const labels=[];
     for(const v of VENUES){
       const d = haversine(POS(), v);
       const brg = bearing(POS(), v);
@@ -508,15 +509,46 @@ function draw(now){
       if(clamped){ // 600m 밖: 방향 화살표 느낌으로 테두리
         ctx.strokeStyle="rgba(46,255,166,.5)"; ctx.beginPath(); ctx.arc(x,y,7,0,7); ctx.stroke();
       }
-      // 라벨
-      const label = `${v.name} ${d<1000? d.toFixed(0)+"m" : (d/1000).toFixed(2)+"km"}`;
-      ctx.font="11px -apple-system,sans-serif";
-      const tw = ctx.measureText(label).width;
-      let lx = x+9, ly = y+4;
-      if(lx+tw > RR){ lx = x-9-tw; }        // 우측 넘치면 좌측
-      ly = Math.max(-RR+10, Math.min(RR-4, ly));
-      ctx.fillStyle="rgba(2,16,12,.7)"; ctx.fillRect(lx-3, ly-11, tw+6, 15);
-      ctx.fillStyle="#c9ffe6"; ctx.fillText(label, lx, ly);
+      labels.push({ v, d, x, y,
+        text:`${v.name} ${d<1000? d.toFixed(0)+"m" : (d/1000).toFixed(2)+"km"}` });
+    }
+
+    // 가까운 관부터 자리를 잡는다 — 밀려나는 건 먼 관이어야 한다
+    labels.sort((p,q)=>p.d-q.d);
+    ctx.font="11px -apple-system,sans-serif";
+    const placed = ringRects.slice();
+    const hit=(a,b)=> a.x < b.x+b.w && a.x+a.w > b.x && a.y < b.y+b.h && a.y+a.h > b.y;
+    for(const L of labels){
+      const tw = ctx.measureText(L.text).width;
+      // 오른쪽/왼쪽 × 위아래 계단으로 빈자리를 찾는다. 못 찾으면 기본 자리에 그린다.
+      let best=null;
+      outer:
+      for(const dy of [0,-14,14,-28,28,-42,42,-56,56]){
+        for(const side of [1,-1]){
+          const lx = side>0 ? L.x+9 : L.x-9-tw;
+          const ly = Math.max(-RR+10, Math.min(RR-4, L.y+4+dy));
+          if(lx < -RR || lx+tw > RR) continue;              // 원판 밖으로 나가면 무효
+          const rect={x:lx-3, y:ly-11, w:tw+6, h:15};
+          if(!placed.some(o=>hit(rect,o))){ best={lx,ly,rect}; break outer; }
+        }
+      }
+      if(!best){
+        const lx = (L.x+9+tw > RR) ? L.x-9-tw : L.x+9;
+        const ly = Math.max(-RR+10, Math.min(RR-4, L.y+4));
+        best={lx,ly,rect:{x:lx-3,y:ly-11,w:tw+6,h:15}};
+      }
+      placed.push(best.rect);
+      // 도트에서 멀어졌으면 가는 선으로 이어 어느 점의 라벨인지 알 수 있게 한다
+      const cy = best.rect.y + best.rect.h/2;
+      if(Math.abs(cy - L.y) > 10){
+        ctx.strokeStyle="rgba(46,255,166,.35)"; ctx.lineWidth=1;
+        ctx.beginPath(); ctx.moveTo(L.x, L.y);
+        ctx.lineTo(best.lx < L.x ? best.rect.x+best.rect.w : best.rect.x, cy);
+        ctx.stroke();
+      }
+      ctx.fillStyle="rgba(2,16,12,.78)";
+      ctx.fillRect(best.rect.x, best.rect.y, best.rect.w, best.rect.h);
+      ctx.fillStyle="#c9ffe6"; ctx.fillText(L.text, best.lx, best.ly);
     }
   }
 
