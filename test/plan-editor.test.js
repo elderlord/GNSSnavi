@@ -202,6 +202,43 @@ const TUNNEL = { lat: 36.375768, lng: 127.375602 };   // 터널 입구 (실측 �
   });
   check('id 중복을 잡아낸다', dup.includes('spur-nari'), `dup=${dup.join(',') || '(없음)'}`);
 
+  // ── 8) 문 위치 불러오기 — 복사본과 화면본 두 형식 모두 ──
+  //   전에 뽑아둔 문 좌표를 다시 넣을 방법이 없으면 매번 처음부터 찍어야 한다.
+  {
+    const both = await page.evaluate(() => {
+      const G = window.__gnssplan;
+      // (a) 복사 출력 형식(주석)
+      const a = G.parseDoors(
+`// ── 실제 문 위치 (손으로 표시. VENUES 를 덮어쓰지 않는 참고 기록) ──
+//   자연사관 (hall-nature) — 문 36.375764, 127.375281  · 실측좌표에서 5.3m 방위 135°
+//   과학기술관 (hall-tech) — 문 36.375886, 127.375210  · 실측좌표에서 12.0m 방위 74°`);
+      // (b) 화면 표시 형식(관 이름 줄 + 다음 줄에 좌표)
+      const b = G.parseDoors(
+`자연사관 — 실측 좌표에서 5.3m (방위 135°)
+문 36.375764, 127.375281
+생물탐구관 — 실측 좌표에서 36.6m (방위 309°)
+문 36.377451, 127.377130`);
+      return { a, b };
+    });
+    check('문 위치를 복사본 형식에서 읽는다', both.a.length === 2, `n=${both.a.length}`);
+    check('  관 id 와 좌표가 맞게 짝지어진다',
+      both.a[0].venueId === 'hall-nature' && near(both.a[0].lat, 36.375764, 1e-6)
+        && both.a[1].venueId === 'hall-tech' && near(both.a[1].lng, 127.375210, 1e-6),
+      JSON.stringify(both.a[0]));
+    check('문 위치를 화면 표시 형식에서도 읽는다', both.b.length === 2, `n=${both.b.length}`);
+    check('  거리(36.6m)나 방위(309°)를 좌표로 오인하지 않는다',
+      both.b[1].venueId === 'hall-bio' && near(both.b[1].lat, 36.377451, 1e-6)
+        && near(both.b[1].lng, 127.377130, 1e-6),
+      JSON.stringify(both.b[1]));
+
+    // 같은 관이 두 번 나오면 마지막 것만
+    const dup = await page.evaluate(() => window.__gnssplan.parseDoors(
+`자연사관 문 36.375700, 127.375200
+자연사관 문 36.375764, 127.375281`));
+    check('  같은 관이 겹치면 마지막 값만 남는다',
+      dup.length === 1 && near(dup[0].lat, 36.375764, 1e-6), `n=${dup.length}`);
+  }
+
   check('콘솔 에러 없음', errs.length === 0, errs.join(';'));
 
   await browser.close();

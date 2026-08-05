@@ -148,7 +148,11 @@ const VENUES = [
     floors:[ {label:"1층",img:"maps/hall-nari-1f.png"}, {label:"2층",img:"maps/hall-nari-2f.png"}, {label:"3층",img:"maps/hall-nari-3f.png"} ] },
   { id:"hall-children", name:"어린이과학관", lat:36.374686, lng:127.376319, radiusIn:28, // ✔확정 2026-08-03 위성락 대표 ±8m (양호 28/31, 최고 ±7m, 산포 0.8m) — 07-31 경계값(±11m, 5/32)에서 1.4m 이동에 그침
     floors:[ {label:"1층",img:"maps/hall-children-1f.png"}, {label:"2층",img:"maps/hall-children-2f.png"} ] },
-  { id:"hall-bio",      name:"생물탐구관",   lat:36.377245, lng:127.377449, radiusIn:26, // N8 돔 · ✔확정 2026-08-03 위성락 ±6m (양호 31/31, 산포 0.4m) — 7개 중 최고 품질
+  { id:"hall-bio",      name:"생물탐구관",   lat:36.377245, lng:127.377449, radiusIn:50, // N8 돔 · ✔확정 2026-08-03 위성락 ±6m (양호 31/31, 산포 0.4m) — 7개 중 최고 품질.
+    // ⚠ radiusIn 만 26→50 으로 키웠다(좌표는 실측 그대로). 측정을 하늘 트인 접근지점에서
+    //   했더니 실제 출입구가 36.6m 밖이라, 26m 로는 문 앞에 서도 진입 판정이 안 됐다.
+    //   50 이면 ±22m 상황에서도(rInEff 39m) 문이 들어온다. 주변 200m 안에 다른 관이
+    //   없어(최근접 천체관 183m) 반경을 키워도 겹칠 상대가 없다.
     mapImage:"maps/hall-bio-1f.png" },
   { id:"hall-astro",    name:"천체관",       lat:36.376541, lng:127.375599, radiusIn:26, // N3 벽면 대형 달 · ✔확정 2026-08-03 위성락 대표 ±10m (양호 23/31, 최고 ±9m, 산포 2.0m · collect.html) — 실측 4개 중 가장 약함(대형 벽면 다중경로 의심), 여유 되면 재측정
     mapImage:"maps/hall-astro.png" },
