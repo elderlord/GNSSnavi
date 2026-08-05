@@ -251,6 +251,54 @@ const TUNNEL = { lat: 36.375768, lng: 127.375602 };   // 터널 입구 (실측 �
       dup.length === 1 && near(dup[0].lat, 36.375764, 1e-6), `n=${dup.length}`);
   }
 
+  // ── 9) 건물 외곽선 — 그리기·출력·되읽기 ──
+  //   배경 도식을 실측 네모에서 손그림 외곽선으로 바꾸는 데이터. 판정에는 쓰이지 않지만
+  //   좌표계는 실측과 같아야 한다(그래야 배경과 마커가 어긋나지 않는다).
+  {
+    const r = await page.evaluate(() => {
+      const G = window.__gnssplan;
+      const S = G.getState();
+      S.paths.length = 0; S.doors.length = 0; S.shapes.length = 0;
+      G.setMode('bldg');
+      // 자연사관 근처에 20m×20m 사각형
+      const b = { lat: 36.375797, lng: 127.375239 };
+      const dLat = 20 / 111132, dLng = 20 / (111320 * Math.cos(b.lat * Math.PI / 180));
+      G.addBldgPointLL({ lat: b.lat, lng: b.lng });
+      G.addBldgPointLL({ lat: b.lat + dLat, lng: b.lng });
+      G.addBldgPointLL({ lat: b.lat + dLat, lng: b.lng + dLng });
+      G.addBldgPointLL({ lat: b.lat, lng: b.lng + dLng });
+      document.getElementById('bname').value = '자연사관 본동';
+      G.endBldg();
+      return { text: G.shapeText(), n: S.shapes.length };
+    });
+    check('건물을 그리면 SITE_SHAPES 로 나온다',
+      r.n === 1 && r.text.includes('const SITE_SHAPES') && r.text.includes('자연사관 본동'),
+      r.text.split('\n')[1]);
+    // 20m×20m = 400㎡ 가 나와야 한다. 신발끈 공식이 뒤집혀 있으면 음수/0 이 나온다.
+    const area = +(r.text.match(/약 (\d+)㎡/) || [])[1];
+    check('  면적을 계산해 붙인다 (좌표를 잘못 찍으면 여기서 티가 난다)',
+      Math.abs(area - 400) <= 20, `${area}㎡ (기대 400)`);
+    check('  3점 미만은 면이 되지 않는다', await page.evaluate(() => {
+      const G = window.__gnssplan; const S = G.getState();
+      const before = S.shapes.length;
+      G.setMode('bldg');
+      G.addBldgPointLL({ lat: 36.3758, lng: 127.3752 });
+      G.addBldgPointLL({ lat: 36.3759, lng: 127.3752 });
+      G.endBldg();
+      return S.shapes.length === before;
+    }));
+
+    // 출력 → 되읽기 왕복
+    const round = await page.evaluate(txt => {
+      const G = window.__gnssplan;
+      const got = G.parsePaths(txt).filter(x => !x.venue);
+      return { n: got.length, name: got[0] && got[0].name, pts: got[0] && got[0].pts.length };
+    }, r.text);
+    check('  출력한 외곽선을 그대로 되읽는다',
+      round.n === 1 && round.name === '자연사관 본동' && round.pts === 4,
+      JSON.stringify(round));
+  }
+
   check('콘솔 에러 없음', errs.length === 0, errs.join(';'));
 
   await browser.close();

@@ -46,6 +46,7 @@
     <button id="mPan" class="on">✋ 이동</button>
     <button id="mDraw">✏️ 경로</button>
     <button id="mDoor">🚪 문</button>
+    <button id="mBldg">🏢 건물</button>
     <span style="flex:1"></span>
     <button id="undo" class="sm">되돌리기</button>
     <button id="fit" class="sm">전체보기</button>
@@ -56,6 +57,10 @@
     </select>
     <input type="text" id="pname" placeholder="경로 이름" style="flex:1">
     <button id="endPath" class="sm">경로 끝</button>
+  </div>
+  <div class="row" id="bldgOpts" style="margin-top:7px;display:none">
+    <input type="text" id="bname" placeholder="건물 이름" style="flex:1">
+    <button id="endBldg" class="sm">건물 끝(닫기)</button>
   </div>
   <div class="row" id="doorOpts" style="margin-top:7px;display:none">
     <select id="doorVenue"></select>
@@ -86,6 +91,7 @@
       <button id="impPaths" class="sm">PATHS 로 읽기</button>
       <button id="impTrack" class="sm">궤적으로 읽기</button>
       <button id="impDoor" class="sm">문으로 읽기</button>
+      <button id="impShape" class="sm">건물로 읽기</button>
       <button id="clrTrack" class="sm">궤적 지우기</button>
     </div>
   </div>
@@ -140,6 +146,8 @@ const S = {
   paths: [],                            // { id, name, venue, pts:[{lat,lng}] }
   cur: null,                            // 그리는 중인 경로
   doors: [],                            // { venueId, lat, lng }
+  shapes: [],                           // 건물 외곽선 { name, pts:[{lat,lng}] } — 닫힌 다각형
+  curB: null,                           // 그리는 중인 건물
   tracks: [],                           // [[{lat,lng},…]]
   bg: null,                             // { img, refs:[{ix,iy,venueId}], T }
   bgPick: false,
@@ -269,6 +277,28 @@ function drawPaths(){
     }
   }
 }
+function drawShapes(){
+  const d=window.devicePixelRatio||1;
+  const all = S.curB ? S.shapes.concat([S.curB]) : S.shapes;
+  for(const sh of all){
+    if(sh.pts.length<2) continue;
+    const cur = sh===S.curB;
+    ctx.beginPath();
+    sh.pts.forEach((q,i)=>{ const p=llToS(q); i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y); });
+    if(!cur) ctx.closePath();
+    ctx.fillStyle="rgba(31,122,84,.22)"; if(!cur) ctx.fill();
+    ctx.strokeStyle=cur?"#ffb454":"#1f7a54"; ctx.lineWidth=2*d;
+    ctx.setLineDash(cur?[6*d,4*d]:[]); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle=cur?"#ffb454":"#2c9c6c";
+    for(const q of sh.pts){ const p=llToS(q); ctx.beginPath(); ctx.arc(p.x,p.y,3*d,0,7); ctx.fill(); }
+    if(sh.name){
+      const c=sh.pts.reduce((a,q)=>({lat:a.lat+q.lat/sh.pts.length, lng:a.lng+q.lng/sh.pts.length}),{lat:0,lng:0});
+      const p=llToS(c);
+      ctx.fillStyle="rgba(223,230,255,.8)"; ctx.font=`${11*d}px -apple-system,sans-serif`;
+      ctx.textAlign="center"; ctx.fillText(sh.name, p.x, p.y+4*d);
+    }
+  }
+}
 function drawDoors(){
   const d=window.devicePixelRatio||1;
   for(const dr of S.doors){
@@ -284,7 +314,7 @@ function drawDoors(){
 }
 function draw(){
   ctx.fillStyle="#0d1117"; ctx.fillRect(0,0,cv.width,cv.height);
-  drawBg(); grid(); drawTracks(); drawVenues(); drawPaths(); drawDoors();
+  drawBg(); grid(); drawShapes(); drawTracks(); drawVenues(); drawPaths(); drawDoors();
 }
 
 /* ═══════════ 입력 ═══════════ */
@@ -323,6 +353,7 @@ cv.addEventListener("pointerup", e=>{
   if(S.bgPick){ pickRef(sp); }
   else if(S.mode==="draw"){ addPoint(sToLL(sp)); }
   else if(S.mode==="door"){ addDoor(sToLL(sp)); }
+  else if(S.mode==="bldg"){ addBldgPoint(sToLL(sp)); }
   last=null;
 });
 cv.addEventListener("wheel", e=>{
@@ -347,6 +378,19 @@ function endPath(){
   }
   S.cur=null; $("pname").value=""; render();
 }
+function addBldgPoint(ll){
+  if(!S.curB) S.curB={ name:$("bname").value.trim(), pts:[] };
+  S.curB.pts.push(ll); render();
+}
+function endBldg(){
+  // 3점 미만이면 면이 되지 않는다. 닫는 건 그리기 단계에서 하고 좌표는 열린 채로 둔다 —
+  // 마지막 점을 중복 저장하면 붙여넣은 쪽에서 0길이 변이 생긴다.
+  if(S.curB && S.curB.pts.length>=3){
+    S.curB.name = $("bname").value.trim() || `건물${S.shapes.length+1}`;
+    S.shapes.push(S.curB);
+  }
+  S.curB=null; $("bname").value=""; render();
+}
 function addDoor(ll){
   const vid=$("doorVenue").value;
   S.doors = S.doors.filter(d=>d.venueId!==vid);
@@ -355,7 +399,9 @@ function addDoor(ll){
 }
 function undo(){
   if(S.bgPick && S.bg && S.bg.refs.length){ S.bg.refs.pop(); solveBg(); }
+  else if(S.curB && S.curB.pts.length) S.curB.pts.pop();
   else if(S.cur && S.cur.pts.length) S.cur.pts.pop();
+  else if(S.shapes.length) S.shapes.pop();
   else if(S.paths.length) S.paths.pop();
   else if(S.doors.length) S.doors.pop();
   render();
@@ -451,7 +497,23 @@ function doorText(){
   }
   return `\n\n// ── 실제 문 위치 (손으로 표시. VENUES 를 덮어쓰지 않는 참고 기록) ──\n${rows}${pair}`;
 }
-function copyText(){ return snippet() + doorText(); }
+// 건물 외곽선. index.html 의 SITE_SHAPES 에 붙여넣으면 배경 도식이 손그림으로 바뀐다.
+function shapeText(){
+  if(!S.shapes.length) return "";
+  const esc = x => String(x).replace(/[\\"]/g, m => "\\"+m);
+  const body = S.shapes.map(sh=>{
+    let A=0;   // 신발끈 공식으로 대략 면적을 낸다 — 점을 잘못 찍으면 여기서 티가 난다
+    for(let i=0,n=sh.pts.length;i<n;i++){
+      const a=toM(sh.pts[i]), b=toM(sh.pts[(i+1)%n]);
+      A += a.x*b.y - b.x*a.y;
+    }
+    return `  { name:"${esc(sh.name)}",\n`
+      + `    pts:[ ${sh.pts.map(q=>`[${q.lat.toFixed(6)},${q.lng.toFixed(6)}]`).join(",\n          ")} ] },`
+      + `   // ${sh.pts.length}점 · 약 ${Math.abs(A/2).toFixed(0)}㎡`;
+  }).join("\n");
+  return `\n\nconst SITE_SHAPES = [\n${body}\n];`;
+}
+function copyText(){ return snippet() + shapeText() + doorText(); }
 
 /* 지선이 '다른 관' 옆을 자기 관보다 가까이 지나면, 스냅은 그 관을 가로챈다.
    완주 경로를 그리면(정문→각 관) 앞부분이 공유돼 이 일이 반드시 생긴다 —
@@ -506,7 +568,7 @@ function warnHtml(){
 }
 
 function render(){
-  $("out").textContent = snippet();
+  $("out").textContent = snippet() + shapeText();
   $("doorReport").innerHTML = warnHtml() + doorReport();
   const n=S.cur?S.cur.pts.length:0;
   let L=0; if(S.cur) for(let i=1;i<S.cur.pts.length;i++) L+=distM(S.cur.pts[i-1],S.cur.pts[i]);
@@ -515,6 +577,10 @@ function render(){
     : S.mode==="draw"
       ? (n ? `그리는 중 — <b>${n}점 · ${L.toFixed(0)}m</b>. 끝나면 <b>경로 끝</b>을 누르세요.`
            : `지도를 탭해 경로를 그립니다. 관으로 이어지는 <b>지선</b>은 위에서 관을 고르세요.`)
+      : S.mode==="bldg"
+        ? ((S.curB?S.curB.pts.length:0) >= 3
+            ? `건물 <b>${S.curB.pts.length}점</b> — <b>건물 끝(닫기)</b> 를 누르면 면이 됩니다.`
+            : `건물 모서리를 차례로 탭하세요 (최소 3점). 지도 캡처를 배경으로 깔면 그대로 따라 그리면 됩니다.`)
       : S.mode==="door"
         ? `실제 문 위치를 탭하세요. 실측 좌표와의 거리가 아래에 나옵니다.`
         : `실측 관 7개를 기준으로 그립니다. 좌표는 <b>VENUES 와 같은 기준계</b>입니다.`;
@@ -629,16 +695,21 @@ for(const v of VENUES){
 }
 function setMode(m){
   if(S.mode==="draw" && m!=="draw") endPath();
+  if(S.mode==="bldg" && m!=="bldg") endBldg();
   S.mode=m; S.bgPick=false; $("bgRef").classList.remove("on");
-  for(const [id,mm] of [["mPan","pan"],["mDraw","draw"],["mDoor","door"]])
+  for(const [id,mm] of [["mPan","pan"],["mDraw","draw"],["mDoor","door"],["mBldg","bldg"]])
     $(id).classList.toggle("on", m===mm);
   $("drawOpts").style.display = m==="draw"?"flex":"none";
   $("doorOpts").style.display = m==="door"?"flex":"none";
+  $("bldgOpts").style.display = m==="bldg"?"flex":"none";
   render();
 }
 $("mPan").onclick=()=>setMode("pan");
 $("mDraw").onclick=()=>setMode("draw");
 $("mDoor").onclick=()=>setMode("door");
+$("mBldg").onclick=()=>setMode("bldg");
+$("endBldg").onclick=endBldg;
+$("bname").oninput=()=>{ if(S.curB) S.curB.name=$("bname").value.trim(); render(); };
 $("endPath").onclick=endPath;
 $("undo").onclick=undo;
 $("fit").onclick=fit;
@@ -668,6 +739,13 @@ $("impTrack").onclick=()=>{
   if(got.length<2){ alert("좌표를 찾지 못했습니다. path.html 원시 로그를 붙여넣으세요."); return; }
   S.tracks.push(got); $("imp").value=""; fit(); render();
 };
+$("impShape").onclick=()=>{
+  // SITE_SHAPES 는 venue 없는 { name, pts } 라 PATHS 파서가 그대로 읽는다
+  const got=parsePaths($("imp").value).filter(x=>!x.venue);
+  if(!got.length){ alert("건물 외곽선을 찾지 못했습니다."); return; }
+  S.shapes.push(...got.map(x=>({name:x.name||"건물", pts:x.pts})));
+  $("imp").value=""; fit(); render();
+};
 $("impDoor").onclick=()=>{
   const got=parseDoors($("imp").value);
   if(!got.length){ alert("문 위치를 찾지 못했습니다.\n관 이름(또는 hall-… id)과 위경도 쌍이 함께 있어야 합니다."); return; }
@@ -692,7 +770,8 @@ resize(); fit(); bgStatus(); render();
 // 테스트 seam (index.html 과 같은 방식)
 window.__gnssplan = {
   getState:()=>S, VENUES, toM, toLL, distM,
-  parsePaths, parseTrack, parseDoors, snippet:()=>snippet(), copyText:()=>copyText(),
+  parsePaths, parseTrack, parseDoors, snippet:()=>snippet(), shapeText:()=>shapeText(),
+  addBldgPointLL:(ll)=>addBldgPoint(ll), endBldg, copyText:()=>copyText(),
   conflicts:()=>conflicts(), distToPath,
   addPointLL:(ll)=>addPoint(ll), endPath, addDoorAt:(vid,ll)=>{ $("doorVenue").value=vid; addDoor(ll); },
   setMode,

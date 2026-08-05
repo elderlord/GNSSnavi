@@ -177,6 +177,12 @@ const SITE_BOUNDS = (() => {
   return { lngMin, lngMax, latMin, latMax, VW, VH: Math.round(VW * (mLat / mLng)) };
 })();
 
+/* 배경 도식의 건물 외곽선. plan.html 의 🏢 건물 모드에서 그려 붙여넣는다.
+   비어 있으면 실측 좌표에서 산출한 네모 블록을 그대로 쓴다(안전한 기본값).
+   손으로 그린 것이라 절대 정확도는 보장되지 않는다 — 방향 감각을 주는 용도이고,
+   판정에는 일절 쓰이지 않는다(지오펜스도 스냅도 이 값을 읽지 않는다). */
+const SITE_SHAPES = [];
+
 /* 지오펜스 히스테리시스 파라미터 (§4.2) */
 const GEO = {
   OUT_MARGIN: 15,   // R_out = radiusIn + 15m (경계 떨림 방지 댐퍼)
@@ -768,10 +774,25 @@ function buildSiteMapSVG(highlightId, bg=false){
     blocks.push(`<text x="${p.x}" y="${p.y+5}" fill="${bg?'#2c6b52':'#3f8a6f'}" font-size="15" text-anchor="middle">${svgEsc(d.name)}</text>`);
   }
 
+  // 손으로 그린 건물 외곽선이 있으면 먼저 깐다 (네모 블록보다 실제 모양에 가깝다)
+  for(const sh of SITE_SHAPES){
+    if(!Array.isArray(sh.pts) || sh.pts.length<3) continue;
+    const pts=sh.pts.map(q=>latlngToSite(q[0],q[1]));
+    if(pts.some(p=>!Number.isFinite(p.x)||!Number.isFinite(p.y))) continue;
+    blocks.push(`<polygon points="${pts.map(p=>`${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ")}"`
+      + ` fill="${bg?'#0c2c22':'#123a2b'}" stroke="${bg?'#1f7a54':'#1f6b4c'}" stroke-width="1.4"/>`);
+  }
+
   // 전시관(7개)
   for(const v of VENUES){
     const p=latlngToSite(v.lat,v.lng), hot=v.id===highlightId;
     const dome=v.id==="hall-bio", w=110, h=72;
+    // 외곽선을 깔았으면 관 표시는 이름표만 남기고 네모는 생략한다(이중으로 겹치지 않게)
+    if(SITE_SHAPES.length && !hot){
+      blocks.push(`<circle cx="${p.x}" cy="${p.y}" r="5" fill="${bg?'#1f7a54':'#2effa6'}"/>`);
+      blocks.push(`<text x="${p.x}" y="${p.y-12}" fill="${bg?'#2c6b52':'#8fe8c4'}" font-size="16" text-anchor="middle">${svgEsc(v.name)}</text>`);
+      continue;
+    }
     const fill=hot?"#0f5c3f":(bg?"#0d3527":"#123a2b"), stroke=hot?"#2effa6":(bg?"#1f7a54":"#1f6b4c"), sw=hot?3:1.4;
     const glow=hot?` filter="url(#g)"`:``;
     if(dome) blocks.push(`<ellipse cx="${p.x}" cy="${p.y}" rx="${w/2}" ry="${h/2}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"${glow}/>`);
