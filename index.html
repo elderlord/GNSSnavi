@@ -776,6 +776,19 @@ function buildSiteMapSVG(highlightId, bg=false){
 
   // 손으로 그린 건물 외곽선이 있으면 먼저 깐다 (네모 블록보다 실제 모양에 가깝다)
   for(const sh of SITE_SHAPES){
+    // 원형 동(천체관·돔 등)은 다각형으로 근사하지 않고 원 그대로 둔다 —
+    // 24각형으로 펴면 좌표가 24쌍이 되어 읽기도 고치기도 나빠진다.
+    if(Array.isArray(sh.c) && sh.r>0){
+      const p=latlngToSite(sh.c[0], sh.c[1]);
+      const q=latlngToSite(sh.c[0], sh.c[1] + sh.r/metersPerDegLng(sh.c[0]));
+      const rx=Math.abs(q.x-p.x);
+      const q2=latlngToSite(sh.c[0] + sh.r/metersPerDegLat(), sh.c[1]);
+      const ry=Math.abs(q2.y-p.y);
+      if(![p.x,p.y,rx,ry].every(Number.isFinite) || rx<=0 || ry<=0) continue;
+      blocks.push(`<ellipse cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" rx="${rx.toFixed(1)}" ry="${ry.toFixed(1)}"`
+        + ` fill="${bg?'#0c2c22':'#123a2b'}" stroke="${bg?'#1f7a54':'#1f6b4c'}" stroke-width="1.4"/>`);
+      continue;
+    }
     if(!Array.isArray(sh.pts) || sh.pts.length<3) continue;
     const pts=sh.pts.map(q=>latlngToSite(q[0],q[1]));
     if(pts.some(p=>!Number.isFinite(p.x)||!Number.isFinite(p.y))) continue;

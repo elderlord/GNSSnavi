@@ -299,6 +299,47 @@ const TUNNEL = { lat: 36.375768, lng: 127.375602 };   // 터널 입구 (실측 �
       JSON.stringify(round));
   }
 
+  // ── 10) 원형 건물 (천체관 같은 돔) ──
+  //   24각형 근사 대신 중심+반지름으로 둔다. 좌표 24쌍보다 읽기도 고치기도 낫고,
+  //   index.html 은 이미 돔을 타원으로 그리고 있어 개념이 맞는다.
+  {
+    const r = await page.evaluate(() => {
+      const G = window.__gnssplan; const S = G.getState();
+      S.shapes.length = 0;
+      document.getElementById('bRound').checked = true;
+      document.getElementById('bname').value = '천체관';
+      G.setMode('bldg');
+      const c = { lat: 36.376541, lng: 127.375599 };
+      G.addBldgPointLL(c);                                  // 중심
+      G.addBldgPointLL({ lat: c.lat + 15 / 111132, lng: c.lng });  // 가장자리 15m
+      // 두 번째 탭에서 자동 확정되므로 endBldg 를 부르지 않는다
+      document.getElementById('bRound').checked = false;
+      return { n: S.shapes.length, sh: S.shapes[0], text: G.shapeText() };
+    });
+    check('원형은 중심+가장자리 두 번 탭으로 확정된다',
+      r.n === 1 && r.sh && r.sh.r != null, `n=${r.n}`);
+    check('  반지름을 미터로 잡는다', r.sh && Math.abs(r.sh.r - 15) <= 0.5, `r=${r.sh && r.sh.r.toFixed(1)}m`);
+    check('  출력이 c/r 형식이고 면적이 πr²',
+      r.text.includes('c:[') && r.text.includes('r:15') && /약 (70[0-9]|7[0-9][0-9])㎡/.test(r.text),
+      (r.text.match(/\/\/.*/) || [])[0]);
+
+    // 되읽기 — 다각형 파서가 원형을 놓치면 안 된다
+    const back = await page.evaluate(() => window.__gnssplan.parseShapes(
+`const SITE_SHAPES = [
+  { name:"천체관", c:[36.376541,127.375599], r:15.0 },   // 원형 지름 30m
+  { name:"자연사관 본동",
+    pts:[ [36.375797,127.375239],[36.375977,127.375239],[36.375977,127.375462] ] },
+  { id:"spur-tech", name:"지선", venue:"hall-tech",
+    pts:[ [36.375793,127.375746],[36.375885,127.375210] ] },
+];`));
+    check('  원형과 다각형을 함께 되읽는다', back.length === 2, `n=${back.length}`);
+    check('  원형이 c/r 로 복원된다',
+      back[0].c && Math.abs(back[0].c.lat - 36.376541) < 1e-6 && back[0].r === 15,
+      JSON.stringify(back[0]));
+    check('  지선(venue 있음)은 건물로 읽지 않는다',
+      !back.some(x => x.name === '지선'), back.map(x => x.name).join(","));
+  }
+
   check('콘솔 에러 없음', errs.length === 0, errs.join(';'));
 
   await browser.close();

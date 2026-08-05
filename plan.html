@@ -60,6 +60,8 @@
   </div>
   <div class="row" id="bldgOpts" style="margin-top:7px;display:none">
     <input type="text" id="bname" placeholder="건물 이름" style="flex:1">
+    <label style="display:flex;align-items:center;gap:5px;cursor:pointer;color:var(--fg);font-size:12.5px">
+      <input type="checkbox" id="bRound" style="width:auto;flex:0 0 auto">원형</label>
     <button id="endBldg" class="sm">건물 끝(닫기)</button>
   </div>
   <div class="row" id="doorOpts" style="margin-top:7px;display:none">
@@ -281,7 +283,17 @@ function drawShapes(){
   const d=window.devicePixelRatio||1;
   const all = S.curB ? S.shapes.concat([S.curB]) : S.shapes;
   for(const sh of all){
-    if(sh.pts.length<2) continue;
+    if(sh.c && sh.r){
+      const p=llToS(sh.c);
+      ctx.beginPath(); ctx.arc(p.x,p.y,sh.r*S.view.scale,0,7);
+      ctx.fillStyle="rgba(31,122,84,.22)"; ctx.fill();
+      ctx.strokeStyle="#1f7a54"; ctx.lineWidth=2*d; ctx.stroke();
+      ctx.fillStyle="#2c9c6c"; ctx.beginPath(); ctx.arc(p.x,p.y,3*d,0,7); ctx.fill();
+      if(sh.name){ ctx.fillStyle="rgba(223,230,255,.8)"; ctx.font=`${11*d}px -apple-system,sans-serif`;
+        ctx.textAlign="center"; ctx.fillText(`${sh.name} ⌀${(sh.r*2).toFixed(0)}m`, p.x, p.y+4*d); }
+      continue;
+    }
+    if(!sh.pts || sh.pts.length<2) continue;
     const cur = sh===S.curB;
     ctx.beginPath();
     sh.pts.forEach((q,i)=>{ const p=llToS(q); i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y); });
@@ -379,15 +391,23 @@ function endPath(){
   S.cur=null; $("pname").value=""; render();
 }
 function addBldgPoint(ll){
-  if(!S.curB) S.curB={ name:$("bname").value.trim(), pts:[] };
-  S.curB.pts.push(ll); render();
+  const round=$("bRound").checked;
+  if(!S.curB) S.curB={ name:$("bname").value.trim(), pts:[], round };
+  S.curB.pts.push(ll);
+  // 원형은 중심·가장자리 두 점이면 확정된다 — 더 찍게 두면 무엇이 반지름인지 모호해진다
+  if(S.curB.round && S.curB.pts.length>=2) endBldg(); else render();
 }
 function endBldg(){
-  // 3점 미만이면 면이 되지 않는다. 닫는 건 그리기 단계에서 하고 좌표는 열린 채로 둔다 —
-  // 마지막 점을 중복 저장하면 붙여넣은 쪽에서 0길이 변이 생긴다.
-  if(S.curB && S.curB.pts.length>=3){
-    S.curB.name = $("bname").value.trim() || `건물${S.shapes.length+1}`;
-    S.shapes.push(S.curB);
+  const b=S.curB;
+  if(b && b.round && b.pts.length>=2){
+    const r=distM(b.pts[0], b.pts[1]);
+    if(r>=1) S.shapes.push({ name:$("bname").value.trim() || `건물${S.shapes.length+1}`,
+                             c:b.pts[0], r });
+  } else if(b && b.pts.length>=3){
+    // 다각형은 3점 미만이면 면이 되지 않는다. 닫는 건 그리기 단계에서 하고 좌표는
+    // 열린 채로 둔다 — 마지막 점을 중복 저장하면 붙여넣은 쪽에서 0길이 변이 생긴다.
+    b.name = $("bname").value.trim() || `건물${S.shapes.length+1}`;
+    S.shapes.push({ name:b.name, pts:b.pts });
   }
   S.curB=null; $("bname").value=""; render();
 }
@@ -407,7 +427,8 @@ function undo(){
   render();
 }
 function fit(){
-  const pts=[...VENUES.map(toM), ...S.paths.flatMap(p=>p.pts.map(toM)), ...S.tracks.flat().map(toM)];
+  const pts=[...VENUES.map(toM), ...S.paths.flatMap(p=>p.pts.map(toM)), ...S.tracks.flat().map(toM),
+    ...S.shapes.flatMap(sh=> sh.c ? [toM(sh.c)] : sh.pts.map(toM))];
   if(!pts.length) return;
   const xs=pts.map(p=>p.x), ys=pts.map(p=>p.y);
   const minx=Math.min(...xs),maxx=Math.max(...xs),miny=Math.min(...ys),maxy=Math.max(...ys);
@@ -502,6 +523,9 @@ function shapeText(){
   if(!S.shapes.length) return "";
   const esc = x => String(x).replace(/[\\"]/g, m => "\\"+m);
   const body = S.shapes.map(sh=>{
+    if(sh.c && sh.r)
+      return `  { name:"${esc(sh.name)}", c:[${sh.c.lat.toFixed(6)},${sh.c.lng.toFixed(6)}], r:${sh.r.toFixed(1)} },`
+        + `   // 원형 지름 ${(sh.r*2).toFixed(0)}m · 약 ${(Math.PI*sh.r*sh.r).toFixed(0)}㎡`;
     let A=0;   // 신발끈 공식으로 대략 면적을 낸다 — 점을 잘못 찍으면 여기서 티가 난다
     for(let i=0,n=sh.pts.length;i<n;i++){
       const a=toM(sh.pts[i]), b=toM(sh.pts[(i+1)%n]);
@@ -580,7 +604,9 @@ function render(){
       : S.mode==="bldg"
         ? ((S.curB?S.curB.pts.length:0) >= 3
             ? `건물 <b>${S.curB.pts.length}점</b> — <b>건물 끝(닫기)</b> 를 누르면 면이 됩니다.`
-            : `건물 모서리를 차례로 탭하세요 (최소 3점). 지도 캡처를 배경으로 깔면 그대로 따라 그리면 됩니다.`)
+            : ($("bRound").checked
+                ? `원형 — <b>중심</b>을 탭하고 <b>가장자리</b>를 탭하면 확정됩니다.`
+                : `건물 모서리를 차례로 탭하세요 (최소 3점). 지도 캡처를 배경으로 깔면 그대로 따라 그리면 됩니다.`))
       : S.mode==="door"
         ? `실제 문 위치를 탭하세요. 실측 좌표와의 거리가 아래에 나옵니다.`
         : `실측 관 7개를 기준으로 그립니다. 좌표는 <b>VENUES 와 같은 기준계</b>입니다.`;
@@ -656,6 +682,25 @@ function parseDoors(txt){
   const seen=new Map();
   for(const d of out) seen.set(d.venueId,d);
   return [...seen.values()];
+}
+
+// 건물 외곽선 파서. 다각형 { name, pts:[…] } 과 원형 { name, c:[lat,lng], r:… } 을 모두 읽는다.
+// PATHS 파서를 재활용하면 pts 가 없는 원형을 통째로 놓친다.
+function parseShapes(txt){
+  const out=[]; const re=/\{[^{}]*\}/g; let m;
+  while((m=re.exec(txt))){
+    const blk=m[0];
+    const name=(blk.match(/name\s*:\s*"([^"]*)"/)||[])[1]||"건물";
+    if(/venue\s*:/.test(blk)) continue;               // 지선은 건물이 아니다
+    const c=blk.match(/c\s*:\s*\[\s*(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)\s*\]/);
+    const r=blk.match(/\br\s*:\s*(\d+(?:\.\d+)?)/);
+    if(c && r && +r[1] > 0){ out.push({ name, c:{lat:+c[1],lng:+c[2]}, r:+r[1] }); continue; }
+    if(!/pts\s*:/.test(blk)) continue;
+    const pts=[...blk.matchAll(/\[\s*(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)\s*\]/g)]
+      .map(q=>({lat:+q[1],lng:+q[2]}));
+    if(pts.length>=3) out.push({ name, pts });          // 3점 미만은 면이 아니다
+  }
+  return out;
 }
 
 /* ═══════════ 배경 ═══════════ */
@@ -740,11 +785,9 @@ $("impTrack").onclick=()=>{
   S.tracks.push(got); $("imp").value=""; fit(); render();
 };
 $("impShape").onclick=()=>{
-  // SITE_SHAPES 는 venue 없는 { name, pts } 라 PATHS 파서가 그대로 읽는다
-  const got=parsePaths($("imp").value).filter(x=>!x.venue);
+  const got=parseShapes($("imp").value);
   if(!got.length){ alert("건물 외곽선을 찾지 못했습니다."); return; }
-  S.shapes.push(...got.map(x=>({name:x.name||"건물", pts:x.pts})));
-  $("imp").value=""; fit(); render();
+  S.shapes.push(...got); $("imp").value=""; fit(); render();
 };
 $("impDoor").onclick=()=>{
   const got=parseDoors($("imp").value);
@@ -770,7 +813,7 @@ resize(); fit(); bgStatus(); render();
 // 테스트 seam (index.html 과 같은 방식)
 window.__gnssplan = {
   getState:()=>S, VENUES, toM, toLL, distM,
-  parsePaths, parseTrack, parseDoors, snippet:()=>snippet(), shapeText:()=>shapeText(),
+  parsePaths, parseTrack, parseDoors, parseShapes, snippet:()=>snippet(), shapeText:()=>shapeText(),
   addBldgPointLL:(ll)=>addBldgPoint(ll), endBldg, copyText:()=>copyText(),
   conflicts:()=>conflicts(), distToPath,
   addPointLL:(ll)=>addPoint(ll), endPath, addDoorAt:(vid,ll)=>{ $("doorVenue").value=vid; addDoor(ll); },
