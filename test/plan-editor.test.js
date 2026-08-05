@@ -340,6 +340,30 @@ const TUNNEL = { lat: 36.375768, lng: 127.375602 };   // 터널 입구 (실측 �
       !back.some(x => x.name === '지선'), back.map(x => x.name).join(","));
   }
 
+  // ── 11) 닫는 점 중복 정리 ──
+  //   시작점 근처를 탭해 닫는 건 자연스러운 조작인데, 그러면 길이 0에 가까운 변이 남는다.
+  //   렌더가 알아서 닫으므로 저장하지 않는다. (실제 작도 5개 전부에 있었다)
+  {
+    const r = await page.evaluate(() => {
+      const G = window.__gnssplan;
+      const got = G.parseShapes(
+`{ name:"미래기술관",
+  pts:[ [36.377074,127.374244],[36.377049,127.374650],
+        [36.376618,127.374600],[36.376644,127.374201],[36.377074,127.374242] ] },`);
+      return { n: got.length, pts: got[0] && got[0].pts.length };
+    });
+    check('닫는 점 중복을 정리한다', r.n === 1 && r.pts === 4, `pts=${r.pts} (원본 5, 마지막은 0.18m)`);
+
+    const keep = await page.evaluate(() => {
+      const G = window.__gnssplan;
+      // 진짜 삼각형은 3점이 유지돼야 한다 (과하게 깎으면 안 된다)
+      const got = G.parseShapes(
+`{ name:"삼각", pts:[ [36.3758,127.3752],[36.3759,127.3752],[36.3759,127.3753] ] },`);
+      return got[0] && got[0].pts.length;
+    });
+    check('  3점 다각형은 깎지 않는다', keep === 3, `pts=${keep}`);
+  }
+
   check('콘솔 에러 없음', errs.length === 0, errs.join(';'));
 
   await browser.close();
