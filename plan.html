@@ -567,18 +567,22 @@ function parseTrack(txt){
 // 처음 나오는 위경도 쌍을 쓴다 — 거리(5.3m)나 방위(135°)를 좌표로 오인하지 않게
 // 위도/경도 범위를 함께 검사한다.
 function parseDoors(txt){
-  const out=[]; let cur=null;
+  // 관 이름과 좌표가 같은 줄이거나 바로 다음 줄에 온다. 그보다 멀어지면 짝이 아니다 —
+  // 산문에 관 이름이 스치듯 나온 뒤 한참 뒤의 엉뚱한 좌표를 물어오는 걸 막는다.
+  const STALE = 2;
+  const out=[]; let cur=null, age=0;
   for(const raw of txt.split("\n")){
     const line=raw.trim(); if(!line) continue;
+    if(cur && ++age > STALE) cur=null;
     const byId=(line.match(/\((hall-[a-z]+)\)/)||[])[1];
     let v = byId ? VENUES.find(x=>x.id===byId) : null;
     if(!v) v = VENUES.find(x=>line.includes(x.name));
-    if(v) cur=v;
+    if(v){ cur=v; age=0; }
     const m=line.match(/(-?\d+\.\d{4,})\s*,\s*(-?\d+\.\d{4,})/);
     if(cur && m){
       const lat=+m[1], lng=+m[2];
       if(Math.abs(lat)<=90 && Math.abs(lng)<=180){
-        out.push({ venueId:cur.id, lat, lng }); cur=null;
+        out.push({ venueId:cur.id, lat, lng }); cur=null; age=0;
       }
     }
   }

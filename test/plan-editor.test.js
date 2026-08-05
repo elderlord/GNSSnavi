@@ -231,6 +231,18 @@ const TUNNEL = { lat: 36.375768, lng: 127.375602 };   // 터널 입구 (실측 �
         && near(both.b[1].lng, 127.377130, 1e-6),
       JSON.stringify(both.b[1]));
 
+    // 산문에 관 이름이 스치고 한참 뒤에 엉뚱한 좌표가 오면 물어오면 안 된다.
+    // (실제로 겪음 — 기록 문서의 "과학기술관 ↔ 자연사관 문 간격 15.0m" 줄이
+    //  자연사관을 잡아둔 채 두 절 뒤의 정문 좌표를 자연사관 문으로 삼켰다)
+    const stale = await page.evaluate(() => window.__gnssplan.parseDoors(
+`과학기술관 ↔ 자연사관 문 간격 15.0m — 복도 따라 7.1m · 가로질러 13.2m
+이 숫자가 결론을 뒤집었다. 접근지점으로 쟀을 땐 가로가 4.2m 였다.
+
+## 기타 실측 지점
+정문   36.375660, 127.376468   ±8m (양호 31/31)`));
+    check('  산문에 스친 관 이름이 먼 좌표를 물어오지 않는다', stale.length === 0,
+      `n=${stale.length} ${JSON.stringify(stale)}`);
+
     // 같은 관이 두 번 나오면 마지막 것만
     const dup = await page.evaluate(() => window.__gnssplan.parseDoors(
 `자연사관 문 36.375700, 127.375200
