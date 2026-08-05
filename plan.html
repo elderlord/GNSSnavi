@@ -423,9 +423,90 @@ function doorReport(){
   return `<div class="sep"></div><div class="hint" style="margin:0"><b>실제 문 위치</b>
     <span class="dim">— VENUES 는 건드리지 않습니다. 아래는 참고용 기록입니다.</span></div>` + rows + pair;
 }
+// 복사 버튼이 가져갈 텍스트. 화면의 문 보고서는 HTML 이라 그대로는 못 옮긴다.
+function doorText(){
+  if(!S.doors.length) return "";
+  const rows = S.doors.map(d=>{
+    const v=VENUES.find(x=>x.id===d.venueId);
+    const dist=distM(d,v);
+    const y=(d.lat-v.lat)*MLAT, x=(d.lng-v.lng)*MLNG;
+    const brg=((Math.atan2(x,y)*180/Math.PI)+360)%360;
+    return `//   ${v.name} (${v.id}) — 문 ${d.lat.toFixed(6)}, ${d.lng.toFixed(6)}`
+      + `  · 실측좌표에서 ${dist.toFixed(1)}m 방위 ${brg.toFixed(0)}°`;
+  }).join("\n");
+  let pair="";
+  const dn=S.doors.find(d=>d.venueId==="hall-nature"), dt=S.doors.find(d=>d.venueId==="hall-tech");
+  if(dn&&dt){
+    const sep=distM(dn,dt);
+    const mains=S.paths.filter(p=>!p.venue&&p.pts.length>=2);
+    pair = `\n//   과학기술관 ↔ 자연사관 문 간격 ${sep.toFixed(1)}m`;
+    if(mains.length){
+      const m=mains[0], a=toM(m.pts[0]), b=toM(m.pts[m.pts.length-1]);
+      const corr=Math.atan2(b.x-a.x,b.y-a.y);
+      const y=(dt.lat-dn.lat)*MLAT, x=(dt.lng-dn.lng)*MLNG;
+      const th=Math.atan2(x,y)-corr;
+      pair += ` — 복도 따라 ${Math.abs(sep*Math.cos(th)).toFixed(1)}m · 가로질러 ${Math.abs(sep*Math.sin(th)).toFixed(1)}m`;
+    }
+  }
+  return `\n\n// ── 실제 문 위치 (손으로 표시. VENUES 를 덮어쓰지 않는 참고 기록) ──\n${rows}${pair}`;
+}
+function copyText(){ return snippet() + doorText(); }
+
+/* 지선이 '다른 관' 옆을 자기 관보다 가까이 지나면, 스냅은 그 관을 가로챈다.
+   완주 경로를 그리면(정문→각 관) 앞부분이 공유돼 이 일이 반드시 생긴다 —
+   공유 구간은 간선(venue 없음)으로 두고 갈라진 꼬리만 지선이어야 한다.
+   그릴 때 바로 알려주지 않으면 붙여넣은 뒤에야 드러난다. */
+function segDist(q,a,b){
+  const vx=b.x-a.x, vy=b.y-a.y, L2=vx*vx+vy*vy;
+  let t=L2?((q.x-a.x)*vx+(q.y-a.y)*vy)/L2:0; t=Math.max(0,Math.min(1,t));
+  return Math.hypot(q.x-(a.x+t*vx), q.y-(a.y+t*vy));
+}
+function distToPath(ll, path){
+  const A=path.pts.map(toM), q=toM(ll); let m=Infinity;
+  for(let i=0;i<A.length-1;i++) m=Math.min(m, segDist(q,A[i],A[i+1]));
+  return m;
+}
+function conflicts(){
+  // 스냅은 '모든 경로를 통틀어 최근접 세그먼트'를 고른다. 그러니 관 V 에서 문제가 되는 것은
+  // "그 지선이 자기 관보다 V 에 가까운가"가 아니라 "V 의 자기 지선보다 내가 V 에 가까운가"다.
+  // (미래기술관 지선이 자기 관 1.2m 로 잘 닿으면서도 과학기술관을 2.1m 로 스쳐 가로챈 것이 이 경우다.)
+  const out=[];
+  const spurs=S.paths.filter(p=>p.venue && p.pts.length>=2);
+  for(const v of VENUES){
+    const mine=spurs.filter(p=>p.venue===v.id);
+    const dOwn = mine.length ? Math.min(...mine.map(p=>distToPath(v,p))) : Infinity;
+    for(const path of spurs){
+      if(path.venue===v.id) continue;
+      const d=distToPath(v,path);
+      // 자기 지선이 없으면 30m(스냅 사정거리) 안을 지나는 남의 지선이 곧 가로채기다
+      if(d < dOwn && (mine.length || d < 30)) out.push({path,v,d,dOwn});
+    }
+  }
+  // id 중복도 같이 본다 — 붙여넣으면 조용히 덮인다
+  const seen=new Map(), dup=[];
+  for(const p of S.paths){ const n=(seen.get(p.id)||0)+1; seen.set(p.id,n); if(n===2) dup.push(p.id); }
+  return { steal:out, dup };
+}
+function warnHtml(){
+  const {steal,dup} = conflicts();
+  if(!steal.length && !dup.length) return "";
+  let h = `<div class="sep"></div>`;
+  for(const d of dup)
+    h += `<div class="warn" style="font-size:11.5px">⚠ id 중복 <b>${d}</b> — 붙여넣으면 하나가 조용히 덮입니다.</div>`;
+  for(const c of steal)
+    h += `<div class="err" style="font-size:11.5px">⚠ <b>${c.path.name||c.path.id}</b> 가 `
+       + `<b>${c.v.name}</b> 를 ${c.d.toFixed(1)}m 로 지납니다 `
+       + `<span class="dim">(${c.v.name} 자기 지선은 ${Number.isFinite(c.dOwn)?c.dOwn.toFixed(1)+"m":"없음"})</span>`
+       + ` — 그 관을 가로챕니다.</div>`;
+  if(steal.length)
+    h += `<div class="hint" style="margin-top:5px">공유 구간은 <b>간선(venue 없음)</b>으로 두고,
+          갈라진 <b>꼬리만 지선</b>으로 그리세요. 완주 경로를 관마다 그리면 앞부분이 겹쳐 서로를 가로챕니다.</div>`;
+  return h;
+}
+
 function render(){
   $("out").textContent = snippet();
-  $("doorReport").innerHTML = doorReport();
+  $("doorReport").innerHTML = warnHtml() + doorReport();
   const n=S.cur?S.cur.pts.length:0;
   let L=0; if(S.cur) for(let i=1;i<S.cur.pts.length;i++) L+=distM(S.cur.pts[i-1],S.cur.pts[i]);
   $("status").innerHTML = S.bgPick
@@ -538,7 +619,7 @@ for(const [btn,pane] of [["tabOut","paneOut"],["tabIn","paneIn"],["tabBg","paneB
   };
 }
 $("copy").onclick=async()=>{
-  try{ await navigator.clipboard.writeText($("out").textContent);
+  try{ await navigator.clipboard.writeText(copyText());
     $("copy").textContent="복사됨 ✓"; setTimeout(()=>$("copy").textContent="복사",1400); }
   catch{ const r=document.createRange(); r.selectNode($("out"));
     getSelection().removeAllRanges(); getSelection().addRange(r); }
@@ -571,7 +652,8 @@ resize(); fit(); bgStatus(); render();
 // 테스트 seam (index.html 과 같은 방식)
 window.__gnssplan = {
   getState:()=>S, VENUES, toM, toLL, distM,
-  parsePaths, parseTrack, snippet:()=>snippet(),
+  parsePaths, parseTrack, snippet:()=>snippet(), copyText:()=>copyText(),
+  conflicts:()=>conflicts(), distToPath,
   addPointLL:(ll)=>addPoint(ll), endPath, addDoorAt:(vid,ll)=>{ $("doorVenue").value=vid; addDoor(ll); },
   setMode,
 };

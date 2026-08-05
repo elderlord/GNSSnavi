@@ -160,6 +160,48 @@ const TUNNEL = { lat: 36.375768, lng: 127.375602 };   // 터널 입구 (실측 �
     wide.includes('지선 스냅으로 구분할 수 있'),
     (wide.match(/가로질러 ([\d.]+)m/) || [])[1] + 'm');
 
+  // ── 7) 지선이 남의 관을 가로채면 그릴 때 바로 경고한다 ──
+  //   오늘 실제로 겪은 결함: 정문→각 관 완주 경로를 그렸더니 앞부분이 공유돼
+  //   미래기술관 지선이 자연사관·과학기술관을 2~4m 로 스쳐 두 관을 모두 가로챘다.
+  //   붙여넣고 앱을 돌려봐야 드러나던 것을, 그리는 화면에서 잡아야 한다.
+  const conf = await page.evaluate(({ GATE, TUNNEL }) => {
+    const G = window.__gnssplan;
+    const S = G.getState();
+    S.paths.length = 0; S.doors.length = 0;
+    // 미래기술관 지선인데 터널 복도를 따라 길게 그어 자연사관·과학기술관을 스친다
+    S.paths.push({ id:'spur-future', name:'볼트러스입구-미래기술관', venue:'hall-future',
+      pts:[ {lat:36.375814,lng:127.375675},{lat:36.375854,lng:127.374703},
+            {lat:36.376654,lng:127.374764},{lat:36.376663,lng:127.374652} ] });
+    const c = G.conflicts();
+    return { steal: c.steal.map(x => x.v.id), dup: c.dup };
+  }, { GATE, TUNNEL });
+  check('남의 관을 더 가까이 지나는 지선을 잡아낸다',
+    conf.steal.includes('hall-nature') && conf.steal.includes('hall-tech'),
+    `가로채는 관=${conf.steal.join(',') || '(없음)'}`);
+
+  // 꼬리만 남긴 지선은 경고가 없어야 한다 (경고가 늘 뜨기만 하면 쓸모없다)
+  const clean = await page.evaluate(() => {
+    const G = window.__gnssplan;
+    const S = G.getState();
+    S.paths.length = 0;
+    S.paths.push({ id:'spur-future', name:'미래기술관 꼬리', venue:'hall-future',
+      pts:[ {lat:36.376560,lng:127.374700},{lat:36.376652,lng:127.374655} ] });
+    return G.conflicts().steal.length;
+  });
+  check('  갈라진 꼬리만 남기면 경고가 사라진다', clean === 0, `steal=${clean}`);
+
+  // id 중복도 잡는다 — 붙여넣으면 조용히 덮인다
+  const dup = await page.evaluate(() => {
+    const G = window.__gnssplan;
+    const S = G.getState();
+    S.paths.length = 0;
+    const pts = [{lat:36.375773,lng:127.376653},{lat:36.375548,lng:127.376774}];
+    S.paths.push({ id:'spur-nari', name:'A', venue:'hall-nari', pts });
+    S.paths.push({ id:'spur-nari', name:'B', venue:'hall-nari', pts });
+    return G.conflicts().dup;
+  });
+  check('id 중복을 잡아낸다', dup.includes('spur-nari'), `dup=${dup.join(',') || '(없음)'}`);
+
   check('콘솔 에러 없음', errs.length === 0, errs.join(';'));
 
   await browser.close();
